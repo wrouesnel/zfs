@@ -244,7 +244,7 @@ typedef struct dmu_replay_record {
 		DRR_BEGIN, DRR_OBJECT, DRR_FREEOBJECTS,
 		DRR_WRITE, DRR_FREE, DRR_END, DRR_WRITE_BYREF,
 		DRR_SPILL, DRR_WRITE_EMBEDDED, DRR_OBJECT_RANGE, DRR_REDACT,
-		DRR_NUMTYPES
+		DRR_WRITE_DELTA, DRR_NUMTYPES
 	} drr_type;
 	uint32_t drr_payloadlen;
 	union {
@@ -321,6 +321,28 @@ typedef struct dmu_replay_record {
 			uint8_t drr_pad2[6];
 			ddt_key_t drr_key; /* deduplication key */
 		} drr_write_byref;
+		/*
+		 * Prototype: the block is rebuilt by applying a patch
+		 * (sys/zfs_delta.h) to (drr_refobject, drr_refoffset,
+		 * drr_reflength) in the fromsnap.  Only sent with
+		 * DMU_BACKUP_FEATURE_BYREF_FROMSNAP.
+		 */
+		struct drr_write_delta {
+			uint64_t drr_object;
+			uint64_t drr_offset;
+			uint64_t drr_length;	/* logical size of target */
+			uint64_t drr_toguid;
+			uint64_t drr_refguid;
+			uint64_t drr_refobject;
+			uint64_t drr_refoffset;
+			uint64_t drr_reflength;
+			/* payload is P2ROUNDUP(drr_patchlen, 8) bytes */
+			uint64_t drr_patchlen;
+			uint32_t drr_type;	/* dmu_object_type_t */
+			uint32_t drr_pad;
+			/* fletcher4 of the rebuilt logical block */
+			zio_cksum_t drr_cksum;
+		} drr_write_delta;
 		struct drr_spill {
 			uint64_t drr_object;
 			uint64_t drr_length;

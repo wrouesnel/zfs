@@ -161,6 +161,20 @@ byteswap_record(dmu_replay_record_t *drr, uint32_t drr_type)
 		DO64(drr_object_range.drr_toguid);
 		break;
 
+	case DRR_WRITE_DELTA:
+		DO64(drr_write_delta.drr_object);
+		DO64(drr_write_delta.drr_offset);
+		DO64(drr_write_delta.drr_length);
+		DO64(drr_write_delta.drr_toguid);
+		DO64(drr_write_delta.drr_refguid);
+		DO64(drr_write_delta.drr_refobject);
+		DO64(drr_write_delta.drr_refoffset);
+		DO64(drr_write_delta.drr_reflength);
+		DO64(drr_write_delta.drr_patchlen);
+		DO32(drr_write_delta.drr_type);
+		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_write_delta.drr_cksum);
+		break;
+
 	case DRR_REDACT:
 		DO64(drr_redact.drr_object);
 		DO64(drr_redact.drr_offset);

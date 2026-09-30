@@ -55,6 +55,7 @@
 #include <sys/zfeature.h>
 #include <sys/bqueue.h>
 #include <sys/objlist.h>
+#include <sys/zfs_delta.h>
 #ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #endif
@@ -76,6 +77,7 @@ static int zfs_recv_best_effort_corrective = 0;
 static int zfs_recv_byref_clone = B_TRUE;
 static uint64_t zfs_recv_byref_cloned = 0;
 static uint64_t zfs_recv_byref_copied = 0;
+static uint64_t zfs_recv_delta_records = 0;
 
 static const void *const dmu_recv_tag = "dmu_recv_tag";
 const char *const recv_clone_name = "%recv";
@@ -261,6 +263,19 @@ byteswap_record(dmu_replay_record_t *drr)
 		DO64(drr_redact.drr_offset);
 		DO64(drr_redact.drr_length);
 		DO64(drr_redact.drr_toguid);
+		break;
+	case DRR_WRITE_DELTA:
+		DO64(drr_write_delta.drr_object);
+		DO64(drr_write_delta.drr_offset);
+		DO64(drr_write_delta.drr_length);
+		DO64(drr_write_delta.drr_toguid);
+		DO64(drr_write_delta.drr_refguid);
+		DO64(drr_write_delta.drr_refobject);
+		DO64(drr_write_delta.drr_refoffset);
+		DO64(drr_write_delta.drr_reflength);
+		DO64(drr_write_delta.drr_patchlen);
+		DO32(drr_write_delta.drr_type);
+		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_write_delta.drr_cksum);
 		break;
 	case DRR_WRITE_BYREF:
 		DO64(drr_write_byref.drr_object);
@@ -3024,6 +3039,9 @@ receive_defer_check(struct receive_writer_arg *rwa,
 	case DRR_WRITE_BYREF:
 		first = last = rrd->header.drr_u.drr_write_byref.drr_object;
 		break;
+	case DRR_WRITE_DELTA:
+		first = last = rrd->header.drr_u.drr_write_delta.drr_object;
+		break;
 	case DRR_FREE:
 		first = last = rrd->header.drr_u.drr_free.drr_object;
 		break;
@@ -4130,6 +4148,84 @@ receive_write_byref(struct receive_writer_arg *rwa,
 	return (err);
 }
 
+/*
+ * Apply a DRR_WRITE_DELTA record: rebuild the block by applying the patch
+ * to (drr_refobject, drr_refoffset, drr_reflength) in our copy of the
+ * fromsnap, check it against the sender's checksum, and write it.
+ */
+static int
+receive_write_delta(struct receive_writer_arg *rwa,
+    struct drr_write_delta *drrwd, void *patch)
+{
+	uint64_t object = drrwd->drr_object;
+	uint64_t offset = drrwd->drr_offset;
+	uint64_t length = drrwd->drr_length;
+	uint64_t reflength = drrwd->drr_reflength;
+	zio_cksum_t cksum;
+	dnode_t *dn;
+	dmu_tx_t *tx;
+	int err;
+
+	if (rwa->ref_os == NULL || drrwd->drr_refguid != rwa->ref_guid)
+		return (SET_ERROR(EINVAL));
+	if (length == 0 || length > SPA_MAXBLOCKSIZE ||
+	    !IS_P2ALIGNED(length, sizeof (uint32_t)) ||
+	    reflength > SPA_MAXBLOCKSIZE || offset + length < offset ||
+	    drrwd->drr_refoffset + reflength < drrwd->drr_refoffset)
+		return (SET_ERROR(EINVAL));
+
+	if (object < rwa->last_object ||
+	    (object == rwa->last_object && offset < rwa->last_offset))
+		return (SET_ERROR(EINVAL));
+	rwa->last_object = object;
+	rwa->last_offset = offset;
+	if (object > rwa->max_object)
+		rwa->max_object = object;
+
+	uint8_t *ref = vmem_alloc(MAX(reflength, 1), KM_SLEEP);
+	uint8_t *tgt = vmem_alloc(length, KM_SLEEP);
+	err = dmu_read(rwa->ref_os, drrwd->drr_refobject,
+	    drrwd->drr_refoffset, reflength, ref, DMU_READ_PREFETCH);
+	if (err == 0) {
+		err = zfs_delta_decode(ref, reflength, patch,
+		    drrwd->drr_patchlen, tgt, length);
+	}
+	if (err == 0) {
+		fletcher_4_native(tgt, length, NULL, &cksum);
+		if (!ZIO_CHECKSUM_EQUAL(cksum, drrwd->drr_cksum))
+			err = SET_ERROR(ECKSUM);
+	}
+	vmem_free(ref, MAX(reflength, 1));
+	if (err != 0) {
+		vmem_free(tgt, length);
+		return (err);
+	}
+
+	err = dnode_hold(rwa->os, object, FTAG, &dn);
+	if (err != 0) {
+		vmem_free(tgt, length);
+		return (SET_ERROR(EINVAL));
+	}
+	tx = dmu_tx_create(rwa->os);
+	dmu_tx_hold_write_by_dnode(tx, dn, offset, length);
+	err = dmu_tx_assign(tx, DMU_TX_WAIT);
+	if (err != 0) {
+		dmu_tx_abort(tx);
+		dnode_rele(dn, FTAG);
+		vmem_free(tgt, length);
+		return (err);
+	}
+	dmu_write_by_dnode(dn, offset, length, tgt, tx, DMU_READ_NO_PREFETCH);
+	atomic_inc_64(&zfs_recv_delta_records);
+
+	/* See comment in restore_write. */
+	save_resume_state(rwa, object, offset, tx);
+	dmu_tx_commit(tx);
+	dnode_rele(dn, FTAG);
+	vmem_free(tgt, length);
+	return (0);
+}
+
 static int
 receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
     abd_t *abd)
@@ -4585,6 +4681,30 @@ receive_read_record(dmu_recv_cookie_t *drc)
 		    drrwe->drr_length);
 		return (err);
 	}
+	case DRR_WRITE_DELTA:
+	{
+		struct drr_write_delta *drrwd =
+		    &drc->drc_rrd->header.drr_u.drr_write_delta;
+
+		if (!(drc->drc_featureflags &
+		    DMU_BACKUP_FEATURE_BYREF_FROMSNAP) ||
+		    drrwd->drr_refguid != drc->drc_drrb->drr_fromguid ||
+		    drrwd->drr_patchlen == 0 ||
+		    drrwd->drr_patchlen > SPA_MAXBLOCKSIZE)
+			return (SET_ERROR(EINVAL));
+
+		uint32_t size = P2ROUNDUP(drrwd->drr_patchlen, 8);
+		void *buf = vmem_zalloc(size, KM_SLEEP);
+
+		int err = receive_read_payload_and_next_header(drc, size, buf);
+		if (err != 0) {
+			vmem_free(buf, size);
+			return (err);
+		}
+		receive_read_prefetch(drc, drrwd->drr_object,
+		    drrwd->drr_offset, drrwd->drr_length);
+		return (err);
+	}
 	case DRR_WRITE_BYREF:
 	{
 		struct drr_write_byref *drrwb =
@@ -4897,6 +5017,15 @@ receive_process_record(struct receive_writer_arg *rwa,
 		struct drr_write_byref *drrwb =
 		    &rrd->header.drr_u.drr_write_byref;
 		err = receive_write_byref(rwa, drrwb);
+		break;
+	}
+	case DRR_WRITE_DELTA:
+	{
+		struct drr_write_delta *drrwd =
+		    &rrd->header.drr_u.drr_write_delta;
+		err = receive_write_delta(rwa, drrwd, rrd->payload);
+		vmem_free(rrd->payload, rrd->payload_size);
+		rrd->payload = NULL;
 		break;
 	}
 	case DRR_WRITE_EMBEDDED:
@@ -5666,6 +5795,9 @@ ZFS_MODULE_PARAM(zfs_recv, zfs_recv_, byref_cloned, U64, ZMOD_RD,
 
 ZFS_MODULE_PARAM(zfs_recv, zfs_recv_, byref_copied, U64, ZMOD_RD,
 	"Number of WRITE_BYREF records applied by copying");
+
+ZFS_MODULE_PARAM(zfs_recv, zfs_recv_, delta_records, U64, ZMOD_RD,
+	"Number of WRITE_DELTA records applied");
 
 ZFS_MODULE_PARAM(zfs_recv, zfs_recv_, best_effort_corrective, INT, ZMOD_RW,
 	"Ignore errors during corrective receive");
