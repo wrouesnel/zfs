@@ -1530,6 +1530,15 @@ do_corrective_recv(struct receive_writer_arg *rwa, struct drr_write *drrw,
 	zio_cksum_t bp_cksum = bp->blk_cksum;
 	zio_flag_t flags = ZIO_FLAG_SPECULATIVE | ZIO_FLAG_DONT_RETRY |
 	    ZIO_FLAG_CANFAIL;
+	/*
+	 * bp points into the parent block's buffer, which is shared through
+	 * the ARC.  A write zio uses the bp it is given as io_bp, and the
+	 * zio_checksum_compute() below stores the checksum of the new data
+	 * in io_bp, so operate on a copy to avoid overwriting the parent's
+	 * block pointer with a bad checksum when the data does not match.
+	 */
+	blkptr_t bp_copy = *bp;
+	bp = &bp_copy;
 
 	if (rwa->raw)
 		flags |= ZIO_FLAG_RAW;
