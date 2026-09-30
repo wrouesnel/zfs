@@ -180,6 +180,9 @@ calc_payload_size(dmu_replay_record_t *drr)
 	} else if (drr_type == DRR_WRITE_EMBEDDED) {
 		size32 = drrwe->drr_psize;
 		round = B_TRUE;
+	} else if (drr_type == DRR_WRITE_DELTA) {
+		size64 = drr->drr_u.drr_write_delta.drr_patchlen;
+		round = B_TRUE;
 	} else if (drr_type == DRR_BEGIN) {
 		size32 = drr->drr_payloadlen;
 	} else {
