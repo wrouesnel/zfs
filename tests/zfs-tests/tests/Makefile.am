@@ -2209,6 +2209,15 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send-c_verify_ratio.ksh \
 	functional/rsend/send-c_volume.ksh \
 	functional/rsend/send-cpL_varied_recsize.ksh \
+	functional/rsend/send_delta_compressed.ksh \
+	functional/rsend/send_delta_corrupt.ksh \
+	functional/rsend/send_delta_inplace.ksh \
+	functional/rsend/send_delta_invalid.ksh \
+	functional/rsend/send_delta_max_pct.ksh \
+	functional/rsend/send_delta_resume.ksh \
+	functional/rsend/send_delta_sibling.ksh \
+	functional/rsend/send_delta_sketch.ksh \
+	functional/rsend/send_delta_zstream.ksh \
 	functional/rsend/send_doall.ksh \
 	functional/rsend/send_embedded_large_block.ksh \
 	functional/rsend/send_embedded_spill_block.ksh \

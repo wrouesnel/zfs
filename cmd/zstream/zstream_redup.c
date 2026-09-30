@@ -120,10 +120,11 @@ chain_redup_writes(void *item_in, void *context_in)
 		 * Fromsnap references point outside the stream, so there is
 		 * nothing here to expand them from.
 		 */
-		if (flags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+		if (flags & (DMU_BACKUP_FEATURE_FROMSNAP_REFS |
+		    DMU_BACKUP_FEATURE_WRITE_DELTA)) {
 			errx(EXIT_FAILURE, "stream references blocks in its "
-			    "incremental source (zfs send --refs) and cannot "
-			    "be converted");
+			    "incremental source (zfs send --refs or --delta) "
+			    "and cannot be converted");
 		}
 		flags &= ~(DMU_BACKUP_FEATURE_DEDUP |
 		    DMU_BACKUP_FEATURE_DEDUPPROPS);

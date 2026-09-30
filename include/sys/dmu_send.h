@@ -40,9 +40,9 @@ struct dmu_send_outparams;
 int
 dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     boolean_t large_block_ok, boolean_t compressok, boolean_t rawok,
-    boolean_t savedok, boolean_t refsok, uint64_t resumeobj,
-    uint64_t resumeoff, const char *redactbook, int outfd, offset_t *off,
-    struct dmu_send_outparams *dsop);
+    boolean_t savedok, boolean_t refsok, boolean_t deltaok,
+    uint64_t resumeobj, uint64_t resumeoff, const char *redactbook, int outfd,
+    offset_t *off, struct dmu_send_outparams *dsop);
 int dmu_send_estimate_fast(struct dsl_dataset *ds, struct dsl_dataset *fromds,
     zfs_bookmark_phys_t *frombook, boolean_t stream_compressed,
     boolean_t saved, uint64_t *sizep);
@@ -62,11 +62,24 @@ typedef struct send_refs_stats {
 	kstat_named_t	send_refs_bytes;
 	kstat_named_t	recv_refs_cloned;
 	kstat_named_t	recv_refs_copied;
+	kstat_named_t	send_delta_attempts;
+	kstat_named_t	send_delta_records;
+	kstat_named_t	send_delta_payload_bytes;
+	kstat_named_t	send_delta_logical_bytes;
+	kstat_named_t	send_delta_same_hits;
+	kstat_named_t	send_delta_sibling_hits;
+	kstat_named_t	send_delta_sketch_hits;
+	kstat_named_t	send_delta_rejected;
+	kstat_named_t	send_delta_sketch_blocks;
+	kstat_named_t	send_delta_sketch_truncated;
+	kstat_named_t	send_delta_sketch_ns;
+	kstat_named_t	recv_delta_records;
 } send_refs_stats_t;
 
 typedef enum send_refs_stat {
 	SEND_REFS_STAT_RECV_CLONED,
 	SEND_REFS_STAT_RECV_COPIED,
+	SEND_REFS_STAT_RECV_DELTA,
 } send_refs_stat_t;
 
 void send_refs_stat_bump(send_refs_stat_t stat);

@@ -428,6 +428,30 @@ dump_redact_record(drr_packet_t *item)
 	}
 }
 
+static void
+dump_write_delta_record(drr_packet_t *item)
+{
+	struct drr_write_delta *drrwd = &item->dp_drr.drr_u.drr_write_delta;
+
+	if (OPTION_ENABLED(CA_DUMP_ALL_RECORDS)) {
+		printf("WRITE_DELTA object = %llu type = %u offset = %llu "
+		    "length = %llu toguid = %llx refguid = %llx "
+		    "refobject = %llu refoffset = %llu reflength = %llu "
+		    "patchlen = %llu\n",
+		    (u_longlong_t)drrwd->drr_object,
+		    drrwd->drr_type,
+		    (u_longlong_t)drrwd->drr_offset,
+		    (u_longlong_t)drrwd->drr_length,
+		    (u_longlong_t)drrwd->drr_toguid,
+		    (u_longlong_t)drrwd->drr_refguid,
+		    (u_longlong_t)drrwd->drr_refobject,
+		    (u_longlong_t)drrwd->drr_refoffset,
+		    (u_longlong_t)drrwd->drr_reflength,
+		    (u_longlong_t)drrwd->drr_patchlen);
+	}
+	maybe_dump_payload(item);
+}
+
 static const record_dumper_t record_dumpers[] = {
 	{ "DRR_BEGIN", 		dump_begin_record },
 	{ "DRR_OBJECT", 	dump_object_record },
@@ -439,7 +463,8 @@ static const record_dumper_t record_dumpers[] = {
 	{ "DRR_SPILL", 		dump_spill_record },
 	{ "DRR_WRITE_EMBEDDED",	dump_write_embedded_record },
 	{ "DRR_OBJECT_RANGE",	dump_object_range_record },
-	{ "DRR_REDACT",		dump_redact_record }
+	{ "DRR_REDACT",		dump_redact_record },
+	{ "DRR_WRITE_DELTA",	dump_write_delta_record }
 };
 
 static disposition_t
@@ -550,7 +575,8 @@ zstream_do_dump(int argc, char *argv[])
 	int print_order[] = {
 		DRR_BEGIN, DRR_END, DRR_OBJECT, DRR_FREEOBJECTS,
 		DRR_WRITE, DRR_WRITE_BYREF, DRR_WRITE_EMBEDDED,
-		DRR_FREE, DRR_SPILL, DRR_OBJECT_RANGE, DRR_REDACT
+		DRR_FREE, DRR_SPILL, DRR_OBJECT_RANGE, DRR_REDACT,
+		DRR_WRITE_DELTA
 	};
 
 	printf("SUMMARY:\n");

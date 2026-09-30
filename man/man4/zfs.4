@@ -2414,6 +2414,30 @@ resilvers per leaf device, given in bytes.
 .It Sy zfs_send_corrupt_data Ns = Ns Sy 0 Ns | Ns 1 Pq int
 Allow sending of corrupt data (ignore read/checksum errors when sending).
 .
+.It Sy zfs_send_delta_max_pct Ns = Ns Sy 50 Ns % Pq uint
+.Nm zfs Cm send Fl -delta
+sends a block as a patch only if the patch is at most this percentage of the
+size of the data it replaces.
+.
+.It Sy zfs_send_delta_sibling_scan Ns = Ns Sy 1024 Pq uint
+Number of blocks of a file that
+.Nm zfs Cm send Fl -delta
+examines to find the file of the incremental source it was copied from.
+.
+.It Sy zfs_send_delta_sketch_max_blocks Ns = Ns Sy 524288 Pq u64
+Maximum number of blocks of the incremental source in the similarity index of
+.Nm zfs Cm send Fl -delta ,
+per send.
+Each uses about 200 bytes of memory.
+Zero disables the index.
+.
+.It Sy zfs_send_delta_sketch_max_bytes Ns = Ns Sy 8589934592 Ns B Po 8 GiB Pc Pq u64
+Maximum amount of data of the incremental source read to build the similarity
+index of
+.Nm zfs Cm send Fl -delta ,
+per send.
+Zero disables the index.
+.
 .It Sy zfs_send_refs_max_blocks Ns = Ns Sy 1048576 Pq u64
 Maximum number of blocks that
 .Nm zfs Cm send Fl -refs

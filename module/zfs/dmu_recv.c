@@ -55,6 +55,7 @@
 #include <sys/zfeature.h>
 #include <sys/bqueue.h>
 #include <sys/objlist.h>
+#include <sys/zfs_delta.h>
 #ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #endif
@@ -264,6 +265,19 @@ byteswap_record(dmu_replay_record_t *drr)
 		DO64(drr_redact.drr_offset);
 		DO64(drr_redact.drr_length);
 		DO64(drr_redact.drr_toguid);
+		break;
+	case DRR_WRITE_DELTA:
+		DO64(drr_write_delta.drr_object);
+		DO64(drr_write_delta.drr_offset);
+		DO64(drr_write_delta.drr_length);
+		DO64(drr_write_delta.drr_toguid);
+		DO64(drr_write_delta.drr_refguid);
+		DO64(drr_write_delta.drr_refobject);
+		DO64(drr_write_delta.drr_refoffset);
+		DO64(drr_write_delta.drr_reflength);
+		DO64(drr_write_delta.drr_patchlen);
+		DO32(drr_write_delta.drr_type);
+		ZIO_CHECKSUM_BSWAP(&drr->drr_u.drr_write_delta.drr_cksum);
 		break;
 	case DRR_WRITE_BYREF:
 		DO64(drr_write_byref.drr_object);
@@ -1034,6 +1048,10 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		}
 		if (featureflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
 			VERIFY0(zap_add(mos, dsobj, DS_FIELD_RESUME_REFSOK,
+			    8, 1, &one, tx));
+		}
+		if (featureflags & DMU_BACKUP_FEATURE_WRITE_DELTA) {
+			VERIFY0(zap_add(mos, dsobj, DS_FIELD_RESUME_DELTAOK,
 			    8, 1, &one, tx));
 		}
 
@@ -2492,6 +2510,82 @@ recv_check_drr_write_byref(const struct drr_write_byref *drrwb, spa_t *spa,
 }
 
 /*
+ * Validate a DRR_WRITE_DELTA record before reading its payload.  These
+ * only occur in streams with DMU_BACKUP_FEATURE_WRITE_DELTA, and must
+ * refer to the fromsnap.
+ */
+int
+recv_check_drr_write_delta(const struct drr_write_delta *drrwd, spa_t *spa,
+    uint64_t featureflags, uint64_t fromguid, char *errbuf, size_t errbuflen)
+{
+	recv_check_limits_t limits;
+
+	recv_check_resolve_limits(spa, &limits);
+
+	if (!(featureflags & DMU_BACKUP_FEATURE_WRITE_DELTA)) {
+		return (recv_check_fail(EINVAL, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA requires DMU_BACKUP_FEATURE_WRITE_DELTA"));
+	}
+	if (fromguid == 0 || drrwd->drr_refguid != fromguid) {
+		return (recv_check_fail(EINVAL, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA refguid %llx is not the fromsnap %llx",
+		    (u_longlong_t)drrwd->drr_refguid,
+		    (u_longlong_t)fromguid));
+	}
+
+	int err = recv_check_drr_object_id(drrwd->drr_object, errbuf,
+	    errbuflen);
+	if (err == 0) {
+		err = recv_check_drr_object_id(drrwd->drr_refobject, errbuf,
+		    errbuflen);
+	}
+	if (err == 0) {
+		err = recv_check_drr_size_min(drrwd->drr_length,
+		    SPA_MINBLOCKSIZE, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA length");
+	}
+	if (err == 0) {
+		err = recv_check_drr_size_max(drrwd->drr_length,
+		    limits.rcl_maxblocksize, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA length");
+	}
+	if (err == 0) {
+		err = recv_check_drr_size_max(drrwd->drr_reflength,
+		    limits.rcl_maxblocksize, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA reference length");
+	}
+	if (err == 0) {
+		err = recv_check_drr_size_min(drrwd->drr_patchlen, 1,
+		    errbuf, errbuflen, "DRR_WRITE_DELTA patch length");
+	}
+	if (err == 0) {
+		err = recv_check_drr_size_max(drrwd->drr_patchlen,
+		    drrwd->drr_length, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA patch length");
+	}
+	if (err != 0)
+		return (err);
+
+	if (drrwd->drr_length > SPA_OLD_MAXBLOCKSIZE &&
+	    !(featureflags & DMU_BACKUP_FEATURE_LARGE_BLOCKS)) {
+		return (recv_check_fail(EINVAL, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA length %llu requires "
+		    "DMU_BACKUP_FEATURE_LARGE_BLOCKS",
+		    (u_longlong_t)drrwd->drr_length));
+	}
+	if (drrwd->drr_offset % drrwd->drr_length != 0 ||
+	    drrwd->drr_refoffset + drrwd->drr_reflength <
+	    drrwd->drr_refoffset) {
+		return (recv_check_fail(EINVAL, errbuf, errbuflen,
+		    "DRR_WRITE_DELTA offset %llu or reference range "
+		    "%llu+%llu is invalid", (u_longlong_t)drrwd->drr_offset,
+		    (u_longlong_t)drrwd->drr_refoffset,
+		    (u_longlong_t)drrwd->drr_reflength));
+	}
+	return (0);
+}
+
+/*
  * Validate a DRR_WRITE record before reading payload or batching the
  * write.
  */
@@ -3091,6 +3185,9 @@ receive_defer_check(struct receive_writer_arg *rwa,
 		break;
 	case DRR_WRITE_BYREF:
 		first = last = rrd->header.drr_u.drr_write_byref.drr_object;
+		break;
+	case DRR_WRITE_DELTA:
+		first = last = rrd->header.drr_u.drr_write_delta.drr_object;
 		break;
 	case DRR_FREE:
 		first = last = rrd->header.drr_u.drr_free.drr_object;
@@ -4199,6 +4296,82 @@ receive_write_byref(struct receive_writer_arg *rwa,
 	return (err);
 }
 
+/*
+ * Apply a DRR_WRITE_DELTA record: rebuild the block by applying the patch
+ * to the reference range of our copy of the fromsnap, check it against the
+ * sender's checksum, and write it.
+ */
+static int
+receive_write_delta(struct receive_writer_arg *rwa,
+    struct drr_write_delta *drrwd, void *patch)
+{
+	uint64_t object = drrwd->drr_object;
+	uint64_t offset = drrwd->drr_offset;
+	uint64_t length = drrwd->drr_length;
+	uint64_t reflength = drrwd->drr_reflength;
+	zio_cksum_t cksum;
+	dnode_t *dn;
+	dmu_tx_t *tx;
+	int err;
+
+	/* Re-validate; stream errors are reported only by the reader. */
+	err = recv_check_drr_write_delta(drrwd, dmu_objset_spa(rwa->os),
+	    rwa->featureflags, rwa->ref_guid, NULL, 0);
+	if (err != 0)
+		return (err);
+	if (rwa->ref_os == NULL)
+		return (SET_ERROR(EINVAL));
+
+	/* Same ordering rule as receive_process_write_record(). */
+	if (object < rwa->last_object ||
+	    (object == rwa->last_object && offset < rwa->last_offset))
+		return (SET_ERROR(EINVAL));
+	rwa->last_object = object;
+	rwa->last_offset = offset;
+	if (object > rwa->max_object)
+		rwa->max_object = object;
+
+	uint8_t *ref = vmem_alloc(MAX(reflength, 1), KM_SLEEP);
+	uint8_t *tgt = vmem_alloc(length, KM_SLEEP);
+	err = dmu_read(rwa->ref_os, drrwd->drr_refobject,
+	    drrwd->drr_refoffset, reflength, ref, DMU_READ_PREFETCH);
+	if (err == 0) {
+		err = zfs_delta_decode(ref, reflength, patch,
+		    drrwd->drr_patchlen, tgt, length);
+	}
+	if (err == 0) {
+		fletcher_4_native(tgt, length, NULL, &cksum);
+		if (!ZIO_CHECKSUM_EQUAL(cksum, drrwd->drr_cksum))
+			err = SET_ERROR(ECKSUM);
+	}
+	vmem_free(ref, MAX(reflength, 1));
+	if (err == 0)
+		err = dnode_hold(rwa->os, object, FTAG, &dn);
+	if (err != 0) {
+		vmem_free(tgt, length);
+		return (err);
+	}
+
+	tx = dmu_tx_create(rwa->os);
+	dmu_tx_hold_write_by_dnode(tx, dn, offset, length);
+	err = dmu_tx_assign(tx, DMU_TX_WAIT);
+	if (err != 0) {
+		dmu_tx_abort(tx);
+		dnode_rele(dn, FTAG);
+		vmem_free(tgt, length);
+		return (err);
+	}
+	dmu_write_by_dnode(dn, offset, length, tgt, tx, DMU_READ_NO_PREFETCH);
+	send_refs_stat_bump(SEND_REFS_STAT_RECV_DELTA);
+
+	/* See comment in restore_write. */
+	save_resume_state(rwa, object, offset, tx);
+	dmu_tx_commit(tx);
+	dnode_rele(dn, FTAG);
+	vmem_free(tgt, length);
+	return (0);
+}
+
 static int
 receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
     abd_t *abd)
@@ -4654,6 +4827,32 @@ receive_read_record(dmu_recv_cookie_t *drc)
 		    drrwe->drr_length);
 		return (err);
 	}
+	case DRR_WRITE_DELTA:
+	{
+		struct drr_write_delta *drrwd =
+		    &drc->drc_rrd->header.drr_u.drr_write_delta;
+
+		/* Reject malformed DRR_WRITE_DELTA before reading payload. */
+		int err = recv_check_drr_write_delta(drrwd,
+		    drc->drc_os->os_spa, drc->drc_featureflags,
+		    drc->drc_drrb->drr_fromguid, errbuf, sizeof (errbuf));
+		if (err != 0) {
+			recv_report_stream_error(drc->drc_errors, errbuf);
+			return (err);
+		}
+
+		uint32_t size = P2ROUNDUP(drrwd->drr_patchlen, 8);
+		void *buf = vmem_alloc(size, KM_SLEEP);
+
+		err = receive_read_payload_and_next_header(drc, size, buf);
+		if (err != 0) {
+			vmem_free(buf, size);
+			return (err);
+		}
+		receive_read_prefetch(drc, drrwd->drr_object,
+		    drrwd->drr_offset, drrwd->drr_length);
+		return (err);
+	}
 	case DRR_WRITE_BYREF:
 	{
 		struct drr_write_byref *drrwb =
@@ -4972,6 +5171,15 @@ receive_process_record(struct receive_writer_arg *rwa,
 		err = receive_write_byref(rwa, drrwb);
 		break;
 	}
+	case DRR_WRITE_DELTA:
+	{
+		struct drr_write_delta *drrwd =
+		    &rrd->header.drr_u.drr_write_delta;
+		err = receive_write_delta(rwa, drrwd, rrd->payload);
+		vmem_free(rrd->payload, rrd->payload_size);
+		rrd->payload = NULL;
+		break;
+	}
 	case DRR_WRITE_EMBEDDED:
 	{
 		struct drr_write_embedded *drrwe =
@@ -5235,7 +5443,8 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 	    sizeof (receive_defer_range_t),
 	    offsetof(receive_defer_range_t, rdr_node));
 
-	if (drc->drc_featureflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+	if (drc->drc_featureflags & (DMU_BACKUP_FEATURE_FROMSNAP_REFS |
+	    DMU_BACKUP_FEATURE_WRITE_DELTA)) {
 		dsl_pool_t *dp = dmu_objset_pool(drc->drc_os);
 
 		if (drc->drc_fromsnapobj == 0 || drc->drc_heal ||

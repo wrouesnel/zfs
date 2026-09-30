@@ -165,6 +165,13 @@ chain_validate_records(void *item_in, void *context_in)
 		validate_fail(err, errbuf);
 		break;
 
+	case DRR_WRITE_DELTA:
+		err = recv_check_drr_write_delta(&drr->drr_u.drr_write_delta,
+		    NULL, context->featureflags, context->fromguid, errbuf,
+		    sizeof (errbuf));
+		validate_fail(err, errbuf);
+		break;
+
 	case DRR_WRITE_EMBEDDED:
 		err = recv_check_drr_write_embedded(drrwe, NULL, is_raw,
 		    context->featureflags, errbuf, sizeof (errbuf));
