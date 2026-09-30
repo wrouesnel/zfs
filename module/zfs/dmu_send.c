@@ -93,6 +93,18 @@ static const boolean_t zfs_send_set_freerecords_bit = B_TRUE;
 /* Set this tunable to FALSE is disable sending unmodified spill blocks. */
 static int zfs_send_unmodified_spill_blocks = B_TRUE;
 
+/*
+ * Prototype: when set, incremental sends from a snapshot replace delta
+ * blocks whose data is already referenced by the fromsnap (as happens when
+ * dedup or block cloning shares a block with it) with DRR_WRITE_BYREF
+ * records naming the fromsnap location.  The receiver resolves them
+ * against its own copy of the fromsnap.
+ */
+static int zfs_send_byref = B_FALSE;
+static uint64_t zfs_send_byref_records = 0;
+static uint64_t zfs_send_byref_bytes = 0;
+static uint64_t zfs_send_byref_index_entries = 0;
+
 static inline boolean_t
 overflow_multiply(uint64_t a, uint64_t b, uint64_t *c)
 {
@@ -155,6 +167,10 @@ struct send_range {
 			boolean_t		io_outstanding;
 			boolean_t		io_compressed;
 			int			io_err;
+			/* send as DRR_WRITE_BYREF of this fromsnap block */
+			boolean_t		byref;
+			uint64_t		ref_object;
+			uint64_t		ref_offset;
 		} data;
 		struct srh {
 			uint32_t		datablksz;
@@ -201,6 +217,7 @@ typedef struct dmu_send_cookie {
 	zio_cksum_t dsc_zc;
 	uint64_t dsc_toguid;
 	uint64_t dsc_fromtxg;
+	uint64_t dsc_fromguid;
 	int dsc_err;
 	dmu_pendop_t dsc_pending_op;
 	uint64_t dsc_featureflags;
@@ -545,6 +562,53 @@ dmu_dump_write(dmu_send_cookie_t *dscp, dmu_object_type_t type, uint64_t object,
 
 	if (dump_record(dscp, data, payload_size) != 0)
 		return (SET_ERROR(EINTR));
+	return (0);
+}
+
+static int
+dump_write_byref(dmu_send_cookie_t *dscp, uint64_t object, uint64_t offset,
+    uint64_t lsize, const blkptr_t *bp, uint64_t refobject, uint64_t refoffset)
+{
+	struct drr_write_byref *drrwb =
+	    &(dscp->dsc_drr->drr_u.drr_write_byref);
+
+	/* Same ordering rules as dmu_dump_write(). */
+	ASSERT(object > dscp->dsc_last_data_object ||
+	    (object == dscp->dsc_last_data_object &&
+	    offset > dscp->dsc_last_data_offset));
+	dscp->dsc_last_data_object = object;
+	dscp->dsc_last_data_offset = offset + lsize - 1;
+
+	if (dscp->dsc_pending_op != PENDING_NONE) {
+		if (dump_record(dscp, NULL, 0) != 0)
+			return (SET_ERROR(EINTR));
+		dscp->dsc_pending_op = PENDING_NONE;
+	}
+
+	memset(dscp->dsc_drr, 0, sizeof (dmu_replay_record_t));
+	dscp->dsc_drr->drr_type = DRR_WRITE_BYREF;
+	drrwb->drr_object = object;
+	drrwb->drr_offset = offset;
+	drrwb->drr_length = lsize;
+	drrwb->drr_toguid = dscp->dsc_toguid;
+	drrwb->drr_refguid = dscp->dsc_fromguid;
+	drrwb->drr_refobject = refobject;
+	drrwb->drr_refoffset = refoffset;
+	drrwb->drr_checksumtype = BP_GET_CHECKSUM(bp);
+	if (zio_checksum_table[drrwb->drr_checksumtype].ci_flags &
+	    ZCHECKSUM_FLAG_DEDUP)
+		drrwb->drr_flags |= DRR_CHECKSUM_DEDUP;
+	DDK_SET_LSIZE(&drrwb->drr_key, BP_GET_LSIZE(bp));
+	DDK_SET_PSIZE(&drrwb->drr_key, BP_GET_PSIZE(bp));
+	DDK_SET_COMPRESS(&drrwb->drr_key, BP_GET_COMPRESS(bp));
+	DDK_SET_CRYPT(&drrwb->drr_key, BP_IS_PROTECTED(bp));
+	drrwb->drr_key.ddk_cksum = bp->blk_cksum;
+
+	if (dump_record(dscp, NULL, 0) != 0)
+		return (SET_ERROR(EINTR));
+
+	atomic_inc_64(&zfs_send_byref_records);
+	atomic_add_64(&zfs_send_byref_bytes, lsize);
 	return (0);
 }
 
@@ -937,6 +1001,13 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 		    dscp->dsc_resume_offset)));
 		/* it's a level-0 block of a regular object */
 
+		if (srdp->byref) {
+			return (dump_write_byref(dscp, range->object,
+			    range->start_blkid * srdp->datablksz,
+			    srdp->datablksz, bp, srdp->ref_object,
+			    srdp->ref_offset));
+		}
+
 		mutex_enter(&srdp->lock);
 		while (srdp->io_outstanding)
 			cv_wait(&srdp->cv, &srdp->lock);
@@ -1062,6 +1133,7 @@ range_alloc(enum type type, uint64_t object, uint64_t start_blkid,
 		range->sru.data.io_outstanding = 0;
 		range->sru.data.io_err = 0;
 		range->sru.data.io_compressed = B_FALSE;
+		range->sru.data.byref = B_FALSE;
 	} else if (type == OBJECT) {
 		range->sru.object.spill_range = NULL;
 	}
@@ -1593,7 +1665,184 @@ struct send_reader_thread_arg {
 	boolean_t issue_reads;
 	uint64_t featureflags;
 	int error;
+	/* fromsnap block index for DRR_WRITE_BYREF, or NULL */
+	avl_tree_t *byref_index;
+	uint64_t byref_fromtxg;
 };
+
+/*
+ * An L0 data block referenced by the fromsnap, keyed by its first DVA.
+ * Dedup and block cloning share DVAs between the original block and every
+ * later reference to it, so a delta block whose DVA is in this index is
+ * data the receiver already has at (be_object, be_offset) in the fromsnap.
+ */
+typedef struct byref_entry {
+	avl_node_t	be_node;
+	dva_t		be_dva;
+	uint64_t	be_birth;
+	uint64_t	be_object;
+	uint64_t	be_offset;
+} byref_entry_t;
+
+static int
+byref_entry_compare(const void *a, const void *b)
+{
+	const byref_entry_t *ea = a, *eb = b;
+	int cmp = TREE_CMP(DVA_GET_VDEV(&ea->be_dva),
+	    DVA_GET_VDEV(&eb->be_dva));
+	if (cmp != 0)
+		return (cmp);
+	return (TREE_CMP(DVA_GET_OFFSET(&ea->be_dva),
+	    DVA_GET_OFFSET(&eb->be_dva)));
+}
+
+static boolean_t
+byref_bp_eligible(const blkptr_t *bp)
+{
+	return (!BP_IS_HOLE(bp) && !BP_IS_EMBEDDED(bp) &&
+	    !BP_IS_REDACTED(bp) && !BP_IS_GANG(bp) &&
+	    !DMU_OT_IS_METADATA(BP_GET_TYPE(bp)));
+}
+
+static int
+byref_index_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
+{
+	(void) spa, (void) zilog, (void) dnp;
+	avl_tree_t *index = arg;
+	avl_index_t where;
+
+	if (bp == NULL || zb->zb_level != 0 ||
+	    zb->zb_object == DMU_META_DNODE_OBJECT ||
+	    zb->zb_blkid == DMU_SPILL_BLKID || !byref_bp_eligible(bp))
+		return (0);
+
+	byref_entry_t *be = kmem_alloc(sizeof (*be), KM_SLEEP);
+	be->be_dva = bp->blk_dva[0];
+	if (avl_find(index, be, &where) != NULL) {
+		/* Referenced more than once; the first location will do. */
+		kmem_free(be, sizeof (*be));
+		return (0);
+	}
+	be->be_birth = BP_GET_PHYSICAL_BIRTH(bp);
+	be->be_object = zb->zb_object;
+	be->be_offset = zb->zb_blkid * BP_GET_LSIZE(bp);
+	avl_insert(index, be, where);
+	return (0);
+}
+
+static void
+byref_index_destroy(avl_tree_t *index)
+{
+	byref_entry_t *be;
+	void *cookie = NULL;
+
+	while ((be = avl_destroy_nodes(index, &cookie)) != NULL)
+		kmem_free(be, sizeof (*be));
+	avl_destroy(index);
+	kmem_free(index, sizeof (*index));
+}
+
+/*
+ * Find and long-hold the snapshot in to_ds's history that the incremental
+ * is from.  Called with the pool config lock held.  Returns NULL if the
+ * source is not an existing snapshot (e.g. a bookmark of a destroyed one).
+ */
+static dsl_dataset_t *
+byref_fromsnap_hold(dsl_pool_t *dp, dsl_dataset_t *to_ds,
+    const zfs_bookmark_phys_t *ancestor_zb, const void *tag)
+{
+	dsl_dataset_t *ds = NULL;
+	uint64_t obj = dsl_dataset_phys(to_ds)->ds_prev_snap_obj;
+	int err;
+
+	ASSERT(dsl_pool_config_held(dp));
+	while (obj != 0) {
+		err = dsl_dataset_hold_obj(dp, obj, FTAG, &ds);
+		if (err != 0) {
+			ds = NULL;
+			break;
+		}
+		if (dsl_dataset_phys(ds)->ds_guid == ancestor_zb->zbm_guid)
+			break;
+		if (dsl_dataset_phys(ds)->ds_creation_txg <
+		    ancestor_zb->zbm_creation_txg) {
+			dsl_dataset_rele(ds, FTAG);
+			ds = NULL;
+			break;
+		}
+		obj = dsl_dataset_phys(ds)->ds_prev_snap_obj;
+		dsl_dataset_rele(ds, FTAG);
+		ds = NULL;
+	}
+	if (ds == NULL)
+		return (NULL);
+	/* Transfer the hold to the caller's tag. */
+	dsl_dataset_long_hold(ds, tag);
+	dsl_dataset_t *ret;
+	VERIFY0(dsl_dataset_hold_obj(dp, ds->ds_object, tag, &ret));
+	dsl_dataset_rele(ds, FTAG);
+	return (ret);
+}
+
+static void
+byref_fromsnap_rele(dsl_dataset_t *ds, const void *tag)
+{
+	dsl_dataset_long_rele(ds, tag);
+	dsl_dataset_rele(ds, tag);
+}
+
+/*
+ * Build the fromsnap block index by traversing the whole fromsnap.  Only
+ * block pointers are visited; no data is read.  Returns NULL on failure.
+ */
+static avl_tree_t *
+byref_index_build(dsl_dataset_t *ds)
+{
+	int err;
+	avl_tree_t *index = kmem_alloc(sizeof (*index), KM_SLEEP);
+	avl_create(index, byref_entry_compare, sizeof (byref_entry_t),
+	    offsetof(byref_entry_t, be_node));
+	err = traverse_dataset(ds, 0,
+	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, byref_index_cb, index);
+	if (err != 0) {
+		byref_index_destroy(index);
+		return (NULL);
+	}
+	atomic_add_64(&zfs_send_byref_index_entries, avl_numnodes(index));
+	return (index);
+}
+
+/*
+ * Decide whether a delta block can be sent as a reference to the fromsnap.
+ * The logical/physical birth test is the cheap filter: a block rewritten
+ * after the fromsnap whose data was written before it can only be a dedup
+ * hit or a clone.  The index then tells us whether the fromsnap has it.
+ */
+static boolean_t
+byref_lookup(struct send_reader_thread_arg *srta, struct send_range *range,
+    boolean_t split_large_blocks)
+{
+	struct srd *srdp = &range->sru.data;
+	const blkptr_t *bp = &srdp->bp;
+
+	if (srta->byref_index == NULL || split_large_blocks ||
+	    range->start_blkid == DMU_SPILL_BLKID || !byref_bp_eligible(bp) ||
+	    BP_GET_LOGICAL_BIRTH(bp) <= srta->byref_fromtxg ||
+	    BP_GET_PHYSICAL_BIRTH(bp) > srta->byref_fromtxg)
+		return (B_FALSE);
+
+	byref_entry_t search;
+	search.be_dva = bp->blk_dva[0];
+	byref_entry_t *be = avl_find(srta->byref_index, &search, NULL);
+	if (be == NULL || be->be_birth != BP_GET_PHYSICAL_BIRTH(bp))
+		return (B_FALSE);
+
+	srdp->byref = B_TRUE;
+	srdp->ref_object = be->be_object;
+	srdp->ref_offset = be->be_offset;
+	return (B_TRUE);
+}
 
 static void
 dmu_send_read_done(zio_t *zio)
@@ -1658,6 +1907,9 @@ issue_data_read(struct send_reader_thread_arg *srta, struct send_range *range)
 
 	srdp->datasz = (zioflags & ZIO_FLAG_RAW_COMPRESS) ?
 	    BP_GET_PSIZE(bp) : BP_GET_LSIZE(bp);
+
+	if (byref_lookup(srta, range, split_large_blocks))
+		return;
 
 	if (!srta->issue_reads)
 		return;
@@ -2187,8 +2439,10 @@ setup_merge_thread(struct send_merge_thread_arg *smt_arg,
 static void
 setup_reader_thread(struct send_reader_thread_arg *srt_arg,
     struct dmu_send_params *dspp, struct send_merge_thread_arg *smt_arg,
-    uint64_t featureflags)
+    uint64_t featureflags, avl_tree_t *byref_index, uint64_t fromtxg)
 {
+	srt_arg->byref_index = byref_index;
+	srt_arg->byref_fromtxg = fromtxg;
 	VERIFY0(bqueue_init(&srt_arg->q, zfs_send_queue_ff,
 	    MAX(zfs_send_queue_length, 2 * zfs_max_recordsize),
 	    offsetof(struct send_range, ln)));
@@ -2438,6 +2692,8 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	redaction_list_t *redact_rl = NULL;
 	boolean_t resuming = (dspp->resumeobj != 0 || dspp->resumeoff != 0);
 	boolean_t book_resuming = resuming;
+	avl_tree_t *byref_index = NULL;
+	dsl_dataset_t *byref_fromds = NULL;
 
 	dsl_dataset_t *to_ds = dspp->to_ds;
 	zfs_bookmark_phys_t *ancestor_zb = &dspp->ancestor_zb;
@@ -2511,6 +2767,18 @@ dmu_send_impl(struct dmu_send_params *dspp)
 
 	dsl_dataset_long_hold(to_ds, FTAG);
 
+	/*
+	 * Reference-based sends are only attempted for plain incrementals
+	 * from a snapshot: no redaction and no encryption.
+	 */
+	if (zfs_send_byref && fromtxg != 0 && !dspp->rawok &&
+	    !os->os_encrypted && dspp->redactbook == NULL &&
+	    ancestor_zb->zbm_redaction_obj == 0 &&
+	    dspp->numfromredactsnaps == NUM_SNAPS_NOT_REDACTED) {
+		byref_fromds = byref_fromsnap_hold(dp, to_ds, ancestor_zb,
+		    FTAG);
+	}
+
 	from_arg = kmem_zalloc(sizeof (*from_arg), KM_SLEEP);
 	to_arg = kmem_zalloc(sizeof (*to_arg), KM_SLEEP);
 	rlt_arg = kmem_zalloc(sizeof (*rlt_arg), KM_SLEEP);
@@ -2526,12 +2794,26 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	dsc.dsc_off = dspp->off;
 	dsc.dsc_toguid = dsl_dataset_phys(to_ds)->ds_guid;
 	dsc.dsc_fromtxg = fromtxg;
+	dsc.dsc_fromguid = ancestor_zb->zbm_guid;
 	dsc.dsc_pending_op = PENDING_NONE;
 	dsc.dsc_featureflags = featureflags;
 	dsc.dsc_resume_object = dspp->resumeobj;
 	dsc.dsc_resume_offset = dspp->resumeoff;
 
 	dsl_pool_rele(dp, tag);
+
+	if (byref_fromds != NULL) {
+		byref_index = byref_index_build(byref_fromds);
+		byref_fromsnap_rele(byref_fromds, FTAG);
+		byref_fromds = NULL;
+		if (byref_index != NULL) {
+			featureflags |= DMU_BACKUP_FEATURE_BYREF_FROMSNAP;
+			dsc.dsc_featureflags = featureflags;
+			DMU_SET_FEATUREFLAGS(
+			    drr->drr_u.drr_begin.drr_versioninfo,
+			    featureflags);
+		}
+	}
 
 	char *payload = NULL;
 	size_t payload_len = 0;
@@ -2625,7 +2907,8 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	setup_from_thread(from_arg, from_rl, dssp);
 	setup_redact_list_thread(rlt_arg, dspp, redact_rl, dssp);
 	setup_merge_thread(smt_arg, dspp, from_arg, to_arg, rlt_arg, os);
-	setup_reader_thread(srt_arg, dspp, smt_arg, featureflags);
+	setup_reader_thread(srt_arg, dspp, smt_arg, featureflags,
+	    byref_index, fromtxg);
 
 	range = bqueue_dequeue(&srt_arg->q);
 	while (err == 0 && !range->eos_marker) {
@@ -2701,6 +2984,8 @@ out:
 	kmem_free(rlt_arg, sizeof (*rlt_arg));
 	kmem_free(smt_arg, sizeof (*smt_arg));
 	kmem_free(srt_arg, sizeof (*srt_arg));
+	if (byref_index != NULL)
+		byref_index_destroy(byref_index);
 
 	dsl_dataset_long_rele(to_ds, FTAG);
 	if (from_rl != NULL) {
@@ -3187,6 +3472,18 @@ ZFS_MODULE_PARAM(zfs_send, zfs_send_, queue_length, UINT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, unmodified_spill_blocks, INT, ZMOD_RW,
 	"Send unmodified spill blocks");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, byref, INT, ZMOD_RW,
+	"Send delta blocks already in the fromsnap as WRITE_BYREF records");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, byref_records, U64, ZMOD_RD,
+	"Number of WRITE_BYREF records sent");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, byref_bytes, U64, ZMOD_RD,
+	"Logical bytes sent as WRITE_BYREF records");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, byref_index_entries, U64, ZMOD_RD,
+	"Fromsnap blocks indexed for WRITE_BYREF");
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, no_prefetch_queue_length, UINT, ZMOD_RW,
 	"Maximum send queue length for non-prefetch queues");
