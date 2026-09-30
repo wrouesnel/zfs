@@ -4156,6 +4156,16 @@ recv_skip(libzfs_handle_t *hdl, int fd, boolean_t byteswap)
 			    P2ROUNDUP(drr->drr_u.drr_write_embedded.drr_psize,
 			    8), B_FALSE, NULL);
 			break;
+		case DRR_WRITE_DELTA:
+			if (byteswap) {
+				drr->drr_u.drr_write_delta.drr_patchlen =
+				    BSWAP_64(drr->drr_u.drr_write_delta.
+				    drr_patchlen);
+			}
+			(void) recv_read(hdl, fd, buf,
+			    P2ROUNDUP(drr->drr_u.drr_write_delta.drr_patchlen,
+			    8), B_FALSE, NULL);
+			break;
 		case DRR_OBJECT_RANGE:
 		case DRR_WRITE_BYREF:
 		case DRR_FREEOBJECTS:
