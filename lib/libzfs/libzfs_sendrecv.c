@@ -737,7 +737,7 @@ typedef struct send_dump_data {
 	uint64_t prevsnap_obj;
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
-	boolean_t large_block, compress, raw, holds, refs;
+	boolean_t large_block, compress, raw, holds, refs, delta;
 	boolean_t progressastitle;
 	int outfd;
 	boolean_t err;
@@ -1208,6 +1208,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		flags |= LZC_SEND_FLAG_RAW;
 	if (sdd->refs)
 		flags |= LZC_SEND_FLAG_REFS;
+	if (sdd->delta)
+		flags |= LZC_SEND_FLAG_DELTA;
 
 	if (!sdd->doall && !isfromsnap && !istosnap) {
 		if (sdd->replicate) {
@@ -1630,6 +1632,8 @@ lzc_flags_from_sendflags(const sendflags_t *flags)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
 	if (flags->refs)
 		lzc_flags |= LZC_SEND_FLAG_REFS;
+	if (flags->delta)
+		lzc_flags |= LZC_SEND_FLAG_DELTA;
 
 	return (lzc_flags);
 }
@@ -1833,6 +1837,8 @@ lzc_flags_from_resume_nvl(nvlist_t *resume_nvl)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
 	if (nvlist_exists(resume_nvl, "refsok"))
 		lzc_flags |= LZC_SEND_FLAG_REFS;
+	if (nvlist_exists(resume_nvl, "deltaok"))
+		lzc_flags |= LZC_SEND_FLAG_DELTA;
 
 	return (lzc_flags);
 }
@@ -2438,6 +2444,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
 	sdd.refs = flags->refs;
+	sdd.delta = flags->delta;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
 	sdd.raw = flags->raw;
@@ -4150,6 +4157,16 @@ recv_skip(libzfs_handle_t *hdl, int fd, boolean_t byteswap)
 			}
 			(void) recv_read(hdl, fd, buf,
 			    P2ROUNDUP(drr->drr_u.drr_write_embedded.drr_psize,
+			    8), B_FALSE, NULL);
+			break;
+		case DRR_WRITE_DELTA:
+			if (byteswap) {
+				drr->drr_u.drr_write_delta.drr_patchlen =
+				    BSWAP_64(drr->drr_u.drr_write_delta.
+				    drr_patchlen);
+			}
+			(void) recv_read(hdl, fd, buf,
+			    P2ROUNDUP(drr->drr_u.drr_write_delta.drr_patchlen,
 			    8), B_FALSE, NULL);
 			break;
 		case DRR_OBJECT_RANGE:

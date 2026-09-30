@@ -752,6 +752,60 @@ zstream_do_dump(int argc, char *argv[])
 				    (u_longlong_t)drrr->drr_length);
 			}
 			break;
+		case DRR_WRITE_DELTA:
+		{
+			struct drr_write_delta *drrwd =
+			    &drr->drr_u.drr_write_delta;
+			if (do_byteswap) {
+				drrwd->drr_object =
+				    BSWAP_64(drrwd->drr_object);
+				drrwd->drr_offset =
+				    BSWAP_64(drrwd->drr_offset);
+				drrwd->drr_length =
+				    BSWAP_64(drrwd->drr_length);
+				drrwd->drr_toguid =
+				    BSWAP_64(drrwd->drr_toguid);
+				drrwd->drr_refguid =
+				    BSWAP_64(drrwd->drr_refguid);
+				drrwd->drr_refobject =
+				    BSWAP_64(drrwd->drr_refobject);
+				drrwd->drr_refoffset =
+				    BSWAP_64(drrwd->drr_refoffset);
+				drrwd->drr_reflength =
+				    BSWAP_64(drrwd->drr_reflength);
+				drrwd->drr_patchlen =
+				    BSWAP_64(drrwd->drr_patchlen);
+				drrwd->drr_type = BSWAP_32(drrwd->drr_type);
+			}
+			if (verbose) {
+				(void) printf("WRITE_DELTA object = %llu "
+				    "type = %u offset = %llu length = %llu "
+				    "toguid = %llx refguid = %llx "
+				    "refobject = %llu refoffset = %llu "
+				    "reflength = %llu patchlen = %llu\n",
+				    (u_longlong_t)drrwd->drr_object,
+				    drrwd->drr_type,
+				    (u_longlong_t)drrwd->drr_offset,
+				    (u_longlong_t)drrwd->drr_length,
+				    (u_longlong_t)drrwd->drr_toguid,
+				    (u_longlong_t)drrwd->drr_refguid,
+				    (u_longlong_t)drrwd->drr_refobject,
+				    (u_longlong_t)drrwd->drr_refoffset,
+				    (u_longlong_t)drrwd->drr_reflength,
+				    (u_longlong_t)drrwd->drr_patchlen);
+			}
+			payload_size = P2ROUNDUP(drrwd->drr_patchlen, 8);
+			if (payload_size > SPA_MAXBLOCKSIZE) {
+				(void) fprintf(stderr, "invalid "
+				    "DRR_WRITE_DELTA patch length %llu\n",
+				    (u_longlong_t)drrwd->drr_patchlen);
+				exit(1);
+			}
+			(void) ssread(buf, payload_size, &zc);
+			if (dump)
+				print_block(buf, payload_size);
+			break;
+		}
 		case DRR_NUMTYPES:
 			/* should never be reached */
 			exit(1);
@@ -800,6 +854,9 @@ zstream_do_dump(int argc, char *argv[])
 	(void) printf("\tTotal DRR_SPILL records = %lld (%llu bytes)\n",
 	    (u_longlong_t)drr_record_count[DRR_SPILL],
 	    (u_longlong_t)drr_byte_count[DRR_SPILL]);
+	(void) printf("\tTotal DRR_WRITE_DELTA records = %lld (%llu bytes)\n",
+	    (u_longlong_t)drr_record_count[DRR_WRITE_DELTA],
+	    (u_longlong_t)drr_byte_count[DRR_WRITE_DELTA]);
 	(void) printf("\tTotal records = %lld\n",
 	    (u_longlong_t)total_records);
 	(void) printf("\tTotal payload size = %lld (0x%llx)\n",

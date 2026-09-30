@@ -210,6 +210,20 @@ zstream_do_recompress(int argc, char *argv[])
 			break;
 		}
 
+		case DRR_WRITE_DELTA:
+		{
+			/*
+			 * Patches against the incremental source (zfs send
+			 * --delta) are not compressed and pass through.
+			 */
+			VERIFY3S(begin, ==, 1);
+			payload_size = P2ROUNDUP(
+			    drr->drr_u.drr_write_delta.drr_patchlen, 8);
+			VERIFY3U(payload_size, <=, bufsz);
+			(void) sfread(buf, payload_size, stdin);
+			break;
+		}
+
 		case DRR_WRITE_BYREF:
 			VERIFY3S(begin, ==, 1);
 			/*

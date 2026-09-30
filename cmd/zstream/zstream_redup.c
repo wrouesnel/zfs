@@ -248,11 +248,12 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 			 * Fromsnap references point outside the stream, so
 			 * there is nothing here to expand them from.
 			 */
-			if (fflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+			if (fflags & (DMU_BACKUP_FEATURE_FROMSNAP_REFS |
+			    DMU_BACKUP_FEATURE_WRITE_DELTA)) {
 				errx(EXIT_FAILURE, "stream references "
 				    "blocks in its incremental source "
-				    "(zfs send --refs) and cannot be "
-				    "converted");
+				    "(zfs send --refs or --delta) and "
+				    "cannot be converted");
 			}
 			fflags &= ~(DMU_BACKUP_FEATURE_DEDUP |
 			    DMU_BACKUP_FEATURE_DEDUPPROPS);

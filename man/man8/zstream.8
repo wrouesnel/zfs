@@ -152,6 +152,8 @@ Therefore, a deduplicated send stream can be received by running:
 .Pp
 Streams created with
 .Nm zfs Cm send Fl -refs
+or
+.Fl -delta
 refer to blocks of their incremental source, which is not part of the stream,
 and cannot be converted.
 .Bl -tag -width "-D"
