@@ -40,8 +40,8 @@ struct dmu_send_outparams;
 int
 dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     boolean_t large_block_ok, boolean_t compressok, boolean_t rawok,
-    boolean_t savedok, uint64_t resumeobj, uint64_t resumeoff,
-    const char *redactbook, int outfd, offset_t *off,
+    boolean_t savedok, boolean_t refsok, uint64_t resumeobj,
+    uint64_t resumeoff, const char *redactbook, int outfd, offset_t *off,
     struct dmu_send_outparams *dsop);
 int dmu_send_estimate_fast(struct dsl_dataset *ds, struct dsl_dataset *fromds,
     zfs_bookmark_phys_t *frombook, boolean_t stream_compressed,
@@ -52,6 +52,26 @@ int dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
     struct dmu_send_outparams *dso);
 
 typedef int (*dmu_send_outfunc_t)(objset_t *os, void *buf, int len, void *arg);
+
+/* Statistics for fromsnap references (zfs send --refs), kstat send_refs. */
+typedef struct send_refs_stats {
+	kstat_named_t	send_refs_candidates;
+	kstat_named_t	send_refs_resolved;
+	kstat_named_t	send_refs_truncated;
+	kstat_named_t	send_refs_records;
+	kstat_named_t	send_refs_bytes;
+	kstat_named_t	recv_refs_cloned;
+	kstat_named_t	recv_refs_copied;
+} send_refs_stats_t;
+
+typedef enum send_refs_stat {
+	SEND_REFS_STAT_RECV_CLONED,
+	SEND_REFS_STAT_RECV_COPIED,
+} send_refs_stat_t;
+
+void send_refs_stat_bump(send_refs_stat_t stat);
+void dmu_send_init(void);
+void dmu_send_fini(void);
 typedef struct dmu_send_outparams {
 	dmu_send_outfunc_t	dso_outfunc;
 	void			*dso_arg;

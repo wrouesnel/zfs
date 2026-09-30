@@ -898,6 +898,8 @@ lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "rawok");
 	if (flags & LZC_SEND_FLAG_SAVED)
 		fnvlist_add_boolean(args, "savedok");
+	if (flags & LZC_SEND_FLAG_REFS)
+		fnvlist_add_boolean(args, "refsok");
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);

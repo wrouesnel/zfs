@@ -138,6 +138,12 @@ typedef enum drr_headertype {
 #define	DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS (1 << 27)
 #define	DMU_BACKUP_FEATURE_LONGNAME		(1 << 28)
 #define	DMU_BACKUP_FEATURE_LARGE_MICROZAP	(1 << 29)
+/*
+ * FROMSNAP_REFS: the stream may contain DRR_WRITE_BYREF records whose
+ * drr_refguid is the incremental source (drr_fromguid).  The receiver
+ * resolves them against its own copy of the fromsnap.
+ */
+#define	DMU_BACKUP_FEATURE_FROMSNAP_REFS	(1ULL << 31)
 
 /*
  * Mask of all supported backup features
@@ -149,7 +155,7 @@ typedef enum drr_headertype {
     DMU_BACKUP_FEATURE_RAW | DMU_BACKUP_FEATURE_HOLDS | \
     DMU_BACKUP_FEATURE_REDACTED | DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS | \
     DMU_BACKUP_FEATURE_ZSTD | DMU_BACKUP_FEATURE_LONGNAME | \
-    DMU_BACKUP_FEATURE_LARGE_MICROZAP)
+    DMU_BACKUP_FEATURE_LARGE_MICROZAP | DMU_BACKUP_FEATURE_FROMSNAP_REFS)
 
 /* Are all features in the given flag word currently supported? */
 #define	DMU_STREAM_SUPPORTED(x)	(!((x) & ~DMU_BACKUP_FEATURE_MASK))
@@ -299,6 +305,13 @@ typedef struct dmu_replay_record {
 			uint64_t drr_length;
 			uint64_t drr_toguid;
 		} drr_free;
+		/*
+		 * Originally used by deduplicated streams (no longer
+		 * supported); now only with DMU_BACKUP_FEATURE_FROMSNAP_REFS,
+		 * where the data is the block at (drr_refobject,
+		 * drr_refoffset) of the fromsnap and drr_key describes the
+		 * sender's copy of it.
+		 */
 		struct drr_write_byref {
 			/* where to put the data */
 			uint64_t drr_object;

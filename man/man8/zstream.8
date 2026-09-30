@@ -11,7 +11,7 @@
 .\"
 .\" Copyright (c) 2020 by Delphix. All rights reserved.
 .\"
-.Dd September 3, 2026
+.Dd October 1, 2026
 .Dt ZSTREAM 8
 .Os
 .
@@ -280,6 +280,11 @@ A real
 .Ar file
 is required here because resolving deduplicated records involves rereading
 earlier parts of the stream.
+.Pp
+Streams created with
+.Nm zfs Cm send Fl -refs
+refer to blocks of their incremental source, which is not part of the stream,
+and cannot be converted.
 .Bl -tag -width "-v"
 .It Fl v
 Verbose.

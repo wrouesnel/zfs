@@ -78,6 +78,7 @@ enum lzc_send_flags {
 	LZC_SEND_FLAG_COMPRESS = 1 << 2,
 	LZC_SEND_FLAG_RAW = 1 << 3,
 	LZC_SEND_FLAG_SAVED = 1 << 4,
+	LZC_SEND_FLAG_REFS = 1 << 5,
 };
 
 _LIBZFS_CORE_H int lzc_send_wrapper(int (*)(int, void *), int, void *);
