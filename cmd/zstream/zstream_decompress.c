@@ -163,6 +163,7 @@ zstream_do_decompress(int argc, char *argv[])
 	fletcher_4_init();
 	int begin = 0;
 	boolean_t seen = B_FALSE;
+	boolean_t refs = B_FALSE;
 	while (sfread(drr, sizeof (*drr), stdin) != 0) {
 		struct drr_write *drrw;
 		uint64_t payload_size = 0;
@@ -181,6 +182,9 @@ zstream_do_decompress(int argc, char *argv[])
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
 			VERIFY0(begin++);
 			seen = B_TRUE;
+			refs = (DMU_GET_FEATUREFLAGS(
+			    drr->drr_u.drr_begin.drr_versioninfo) &
+			    DMU_BACKUP_FEATURE_FROMSNAP_REFS) != 0;
 
 			uint32_t sz = drr->drr_payloadlen;
 
@@ -241,6 +245,12 @@ zstream_do_decompress(int argc, char *argv[])
 
 		case DRR_WRITE_BYREF:
 			VERIFY3S(begin, ==, 1);
+			/*
+			 * References to the incremental source (zfs send
+			 * --refs) have no payload and pass through.
+			 */
+			if (refs)
+				break;
 			fprintf(stderr,
 			    "Deduplicated streams are not supported\n");
 			exit(1);

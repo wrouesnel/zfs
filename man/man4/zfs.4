@@ -18,7 +18,7 @@
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
 .\"
-.Dd September 15, 2025
+.Dd October 1, 2026
 .Dt ZFS 4
 .Os
 .
@@ -2222,6 +2222,17 @@ resilvers per leaf device, given in bytes.
 .
 .It Sy zfs_send_corrupt_data Ns = Ns Sy 0 Ns | Ns 1 Pq int
 Allow sending of corrupt data (ignore read/checksum errors when sending).
+.
+.It Sy zfs_send_refs_max_blocks Ns = Ns Sy 1048576 Pq u64
+Maximum number of blocks that
+.Nm zfs Cm send Fl -refs
+tracks as possible references to the incremental source, per send.
+Each tracked block uses about 64 bytes of memory.
+Blocks beyond this limit are sent in full, and the
+.Sy send_refs_truncated
+counter of the
+.Sy send_refs
+kstat is incremented.
 .
 .It Sy zfs_send_unmodified_spill_blocks Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Include unmodified spill blocks in the send stream.

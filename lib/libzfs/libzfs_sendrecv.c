@@ -737,7 +737,7 @@ typedef struct send_dump_data {
 	uint64_t prevsnap_obj;
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
-	boolean_t large_block, compress, raw, holds;
+	boolean_t large_block, compress, raw, holds, refs;
 	boolean_t progressastitle;
 	int outfd;
 	boolean_t err;
@@ -814,7 +814,7 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 {
 	zfs_cmd_t zc = {"\0"};
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
-	nvlist_t *thisdbg;
+	nvlist_t *thisdbg = NULL;
 
 	assert(zhp->zfs_type == ZFS_TYPE_SNAPSHOT);
 	assert(fromsnap_obj == 0 || !fromorigin);
@@ -832,9 +832,25 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 			fnvlist_add_string(thisdbg, "fromsnap", fromsnap);
 	}
 
-	if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
+	int error = 0;
+	if ((flags & LZC_SEND_FLAG_REFS) && fromsnap_obj != 0 &&
+	    fromsnap != NULL && fromsnap[0] != '\0') {
+		/*
+		 * Fromsnap references are only available through
+		 * ZFS_IOC_SEND_NEW, which names the incremental source.
+		 */
+		char fromname[ZFS_MAX_DATASET_NAME_LEN];
+
+		(void) strlcpy(fromname, zhp->zfs_name, sizeof (fromname));
+		*(strchr(fromname, '@') + 1) = '\0';
+		(void) strlcat(fromname, fromsnap, sizeof (fromname));
+		error = lzc_send(zhp->zfs_name, fromname, outfd, flags);
+	} else if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
+		error = errno;
+	}
+
+	if (error != 0) {
 		char errbuf[ERRBUFLEN];
-		int error = errno;
 
 		(void) snprintf(errbuf, sizeof (errbuf), "%s '%s'",
 		    dgettext(TEXT_DOMAIN, "warning: cannot send"),
@@ -878,11 +894,11 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 		case EFAULT:
 		case EROFS:
 		case EINVAL:
-			zfs_error_aux(hdl, "%s", zfs_strerror(errno));
+			zfs_error_aux(hdl, "%s", zfs_strerror(error));
 			return (zfs_error(hdl, EZFS_BADBACKUP, errbuf));
 
 		default:
-			return (zfs_standard_error(hdl, errno, errbuf));
+			return (zfs_standard_error(hdl, error, errbuf));
 		}
 	}
 
@@ -1190,6 +1206,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		flags |= LZC_SEND_FLAG_COMPRESS;
 	if (sdd->raw)
 		flags |= LZC_SEND_FLAG_RAW;
+	if (sdd->refs)
+		flags |= LZC_SEND_FLAG_REFS;
 
 	if (!sdd->doall && !isfromsnap && !istosnap) {
 		if (sdd->replicate) {
@@ -1610,6 +1628,8 @@ lzc_flags_from_sendflags(const sendflags_t *flags)
 		lzc_flags |= LZC_SEND_FLAG_RAW;
 	if (flags->saved)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
+	if (flags->refs)
+		lzc_flags |= LZC_SEND_FLAG_REFS;
 
 	return (lzc_flags);
 }
@@ -1811,6 +1831,8 @@ lzc_flags_from_resume_nvl(nvlist_t *resume_nvl)
 		lzc_flags |= LZC_SEND_FLAG_RAW;
 	if (nvlist_exists(resume_nvl, "savedok"))
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
+	if (nvlist_exists(resume_nvl, "refsok"))
+		lzc_flags |= LZC_SEND_FLAG_REFS;
 
 	return (lzc_flags);
 }
@@ -2415,6 +2437,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.progressastitle = flags->progressastitle;
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
+	sdd.refs = flags->refs;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
 	sdd.raw = flags->raw;

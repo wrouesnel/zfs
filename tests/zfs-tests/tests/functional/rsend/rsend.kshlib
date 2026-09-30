@@ -735,6 +735,7 @@ function stream_has_features
 	feature[redacted]="200000"
 	feature[compressed]="400000"
 	feature[longname]="10000000"
+	feature[fromsnap_refs]="80000000"
 
 	typeset flag known derived=0
 	for flag in "$@"; do
@@ -834,4 +835,92 @@ function recursive_cksum
 		    \; | sort -k 2 | awk '{ print $1 }' | xxh128digest
 		;;
 	esac
+}
+
+#
+# Helpers for the zfs send --refs tests (send_refs_*).
+#
+# Files are written in whole records of REFS_RECSIZE bytes, so that each
+# record copied from a file in the incremental source is exactly one block
+# that the sender can reference.
+#
+export REFS_RECSIZE=131072
+
+#
+# Write records of random data to a file.
+#
+# $1 file
+# $2 number of records
+#
+function refs_mkfile
+{
+	log_must eval "dd if=/dev/urandom of=$1 bs=$REFS_RECSIZE count=$2 \
+	    2>/dev/null"
+}
+
+#
+# Copy records from one file to another with plain writes.  On a dedup=on
+# dataset each copied record is a dedup hit on the source's block, never a
+# block clone.
+#
+# $1 source file
+# $2 destination file
+# $3 first source record (default 0)
+# $4 number of records (default: to the end of the source)
+# $5 first destination record (default 0)
+#
+function refs_copy
+{
+	typeset src=$1
+	typeset dst=$2
+	typeset skip=${3:-0}
+	typeset count=${4:+count=$4}
+	typeset seek=${5:-0}
+
+	log_must eval "dd if=$src of=$dst bs=$REFS_RECSIZE skip=$skip \
+	    seek=$seek $count conv=notrunc 2>/dev/null"
+}
+
+#
+# Print the number of DRR_WRITE_BYREF records in a send stream.
+#
+# $1 stream file
+#
+function stream_byref_records
+{
+	zstream dump $1 | awk '/Total DRR_WRITE_BYREF records/ { print $5 }'
+}
+
+#
+# Print a counter from the send_refs kstat.
+#
+# $1 counter name, e.g. send_refs_records or recv_refs_cloned
+#
+function send_refs_stat
+{
+	kstat send_refs.$1
+}
+
+#
+# Verify that the given snapshots of two filesystems have identical contents.
+#
+# $1 sent filesystem
+# $2 received filesystem
+# $3-$n snapshot names
+#
+function refs_cmp_snaps
+{
+	typeset sendfs=$1
+	typeset recvfs=$2
+	shift 2
+
+	ismounted $sendfs || log_must zfs mount $sendfs
+	ismounted $recvfs || log_must zfs mount $recvfs
+
+	typeset senddir=$(get_prop mountpoint $sendfs)/.zfs/snapshot
+	typeset recvdir=$(get_prop mountpoint $recvfs)/.zfs/snapshot
+	typeset snap
+	for snap in "$@"; do
+		log_must directory_diff $senddir/$snap $recvdir/$snap
+	done
 }

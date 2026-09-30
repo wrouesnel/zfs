@@ -21,7 +21,7 @@
 .\"
 .\" Copyright (c) 2020 by Delphix. All rights reserved.
 .\"
-.Dd November 10, 2022
+.Dd October 1, 2026
 .Dt ZSTREAM 8
 .Os
 .
@@ -149,6 +149,11 @@ containing a deduplicated send stream, and outputs an equivalent
 non-deduplicated send stream on standard output.
 Therefore, a deduplicated send stream can be received by running:
 .Dl # Nm zstream Cm redup Pa DEDUP_STREAM_FILE | Nm zfs Cm receive No …
+.Pp
+Streams created with
+.Nm zfs Cm send Fl -refs
+refer to blocks of their incremental source, which is not part of the stream,
+and cannot be converted.
 .Bl -tag -width "-D"
 .It Fl v
 Verbose.

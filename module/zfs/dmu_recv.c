@@ -76,6 +76,18 @@ static uint_t zfs_recv_queue_ff = 20;
 static uint_t zfs_recv_write_batch_size = 1024 * 1024;
 static int zfs_recv_best_effort_corrective = 0;
 
+/*
+ * Fromsnap references (DRR_WRITE_BYREF) are applied by cloning the local
+ * copy of the block when block cloning is available and enabled, and by
+ * copying it otherwise.
+ */
+#ifdef _KERNEL
+#include <sys/zfs_vnops.h>
+#define	recv_refs_bclone_enabled()	(zfs_bclone_enabled != 0)
+#else
+#define	recv_refs_bclone_enabled()	B_TRUE
+#endif
+
 static const void *const dmu_recv_tag = "dmu_recv_tag";
 const char *const recv_clone_name = "%recv";
 
@@ -141,6 +153,14 @@ struct receive_writer_arg {
 
 	/* Keep track of DRR_FREEOBJECTS right after DRR_OBJECT_RANGE */
 	or_need_sync_t or_need_sync;
+
+	uint64_t featureflags; /* from DRR_BEGIN */
+
+	/* Fromsnap that DRR_WRITE_BYREF records refer to */
+	dsl_dataset_t *ref_ds;
+	objset_t *ref_os;
+	uint64_t ref_guid;
+	ds_hold_flags_t ref_dsflags;
 };
 
 typedef struct dmu_recv_begin_arg {
@@ -224,6 +244,18 @@ byteswap_record(dmu_replay_record_t *drr)
 		DO64(drr_redact.drr_offset);
 		DO64(drr_redact.drr_length);
 		DO64(drr_redact.drr_toguid);
+		break;
+	case DRR_WRITE_BYREF:
+		DO64(drr_write_byref.drr_object);
+		DO64(drr_write_byref.drr_offset);
+		DO64(drr_write_byref.drr_length);
+		DO64(drr_write_byref.drr_toguid);
+		DO64(drr_write_byref.drr_refguid);
+		DO64(drr_write_byref.drr_refobject);
+		DO64(drr_write_byref.drr_refoffset);
+		ZIO_CHECKSUM_BSWAP(
+		    &drr->drr_u.drr_write_byref.drr_key.ddk_cksum);
+		DO64(drr_write_byref.drr_key.ddk_prop);
 		break;
 	case DRR_END:
 		DO64(drr_end.drr_toguid);
@@ -963,6 +995,10 @@ dmu_recv_begin_sync(void *arg, dmu_tx_t *tx)
 		}
 		if (featureflags & DMU_BACKUP_FEATURE_RAW) {
 			VERIFY0(zap_add(mos, dsobj, DS_FIELD_RESUME_RAWOK,
+			    8, 1, &one, tx));
+		}
+		if (featureflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+			VERIFY0(zap_add(mos, dsobj, DS_FIELD_RESUME_REFSOK,
 			    8, 1, &one, tx));
 		}
 
@@ -2562,6 +2598,160 @@ receive_write_embedded(struct receive_writer_arg *rwa,
 	return (0);
 }
 
+/*
+ * Validate a DRR_WRITE_BYREF record.  These only occur in streams with
+ * DMU_BACKUP_FEATURE_FROMSNAP_REFS, and must refer to the fromsnap.
+ */
+static int
+recv_check_write_byref(const struct drr_write_byref *drrwb,
+    uint64_t featureflags, uint64_t fromguid)
+{
+	uint64_t length = drrwb->drr_length;
+
+	if (!(featureflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) ||
+	    fromguid == 0 || drrwb->drr_refguid != fromguid)
+		return (SET_ERROR(EINVAL));
+	if (drrwb->drr_object == 0 || drrwb->drr_object >= DN_MAX_OBJECT ||
+	    drrwb->drr_refobject == 0 ||
+	    drrwb->drr_refobject >= DN_MAX_OBJECT)
+		return (SET_ERROR(EINVAL));
+	if (length < SPA_MINBLOCKSIZE || length > SPA_MAXBLOCKSIZE)
+		return (SET_ERROR(ERANGE));
+	if (length > SPA_OLD_MAXBLOCKSIZE &&
+	    !(featureflags & DMU_BACKUP_FEATURE_LARGE_BLOCKS))
+		return (SET_ERROR(EINVAL));
+	if (drrwb->drr_offset % length != 0 ||
+	    drrwb->drr_refoffset % length != 0)
+		return (SET_ERROR(EINVAL));
+	return (0);
+}
+
+/*
+ * Apply a DRR_WRITE_BYREF record: the data is the block at
+ * (drr_refobject, drr_refoffset) in our copy of the fromsnap.  Our copy is
+ * a logical replica of the sender's, so the block may differ physically
+ * (compression, checksum) but not in content.  Clone it when we can,
+ * otherwise read it and write it.
+ */
+static int
+receive_write_byref(struct receive_writer_arg *rwa,
+    struct drr_write_byref *drrwb)
+{
+	uint64_t object = drrwb->drr_object;
+	uint64_t offset = drrwb->drr_offset;
+	uint64_t length = drrwb->drr_length;
+	dnode_t *dn;
+	dmu_tx_t *tx;
+	blkptr_t bp;
+	void *buf = NULL;
+	boolean_t clone;
+	int err;
+
+	err = recv_check_write_byref(drrwb, rwa->featureflags, rwa->ref_guid);
+	if (err != 0)
+		return (err);
+	if (rwa->ref_os == NULL)
+		return (SET_ERROR(EINVAL));
+
+	/* Same ordering rule as receive_process_write_record(). */
+	if (object < rwa->last_object ||
+	    (object == rwa->last_object && offset < rwa->last_offset))
+		return (SET_ERROR(EINVAL));
+	rwa->last_object = object;
+	rwa->last_offset = offset;
+	if (object > rwa->max_object)
+		rwa->max_object = object;
+
+	err = dnode_hold(rwa->os, object, FTAG, &dn);
+	if (err != 0)
+		return (SET_ERROR(EINVAL));
+
+	clone = recv_refs_bclone_enabled() && !rwa->raw &&
+	    !rwa->os->os_encrypted && dn->dn_datablksz == length &&
+	    spa_feature_is_enabled(dmu_objset_spa(rwa->os),
+	    SPA_FEATURE_BLOCK_CLONING);
+	if (clone) {
+		dnode_t *ref_dn;
+		size_t nbps = 1;
+
+		err = dnode_hold(rwa->ref_os, drrwb->drr_refobject, FTAG,
+		    &ref_dn);
+		if (err == 0) {
+			clone = (ref_dn->dn_datablksz == length);
+			dnode_rele(ref_dn, FTAG);
+		} else {
+			clone = B_FALSE;
+		}
+		if (clone) {
+			err = dmu_read_l0_bps(rwa->ref_os,
+			    drrwb->drr_refobject, drrwb->drr_refoffset,
+			    length, &bp, &nbps);
+			if (err != 0 || nbps != 1)
+				clone = B_FALSE;
+		}
+		/*
+		 * If our copy is physically identical to the sender's (same
+		 * checksum, compression and size), the checksums must match
+		 * too.  A mismatch means the stream does not describe our
+		 * fromsnap.
+		 */
+		if (clone && !BP_IS_HOLE(&bp) && !BP_IS_EMBEDDED(&bp) &&
+		    BP_GET_CHECKSUM(&bp) == drrwb->drr_checksumtype &&
+		    BP_GET_COMPRESS(&bp) == DDK_GET_COMPRESS(&drrwb->drr_key) &&
+		    BP_GET_PSIZE(&bp) == DDK_GET_PSIZE(&drrwb->drr_key) &&
+		    !ZIO_CHECKSUM_EQUAL(bp.blk_cksum,
+		    drrwb->drr_key.ddk_cksum)) {
+			dnode_rele(dn, FTAG);
+			return (SET_ERROR(ECKSUM));
+		}
+	}
+
+	if (!clone) {
+		buf = vmem_alloc(length, KM_SLEEP);
+		err = dmu_read(rwa->ref_os, drrwb->drr_refobject,
+		    drrwb->drr_refoffset, length, buf, DMU_READ_PREFETCH);
+		if (err != 0) {
+			vmem_free(buf, length);
+			dnode_rele(dn, FTAG);
+			return (err);
+		}
+	}
+
+	tx = dmu_tx_create(rwa->os);
+	if (clone)
+		dmu_tx_hold_clone_by_dnode(tx, dn, offset, length, length);
+	else
+		dmu_tx_hold_write_by_dnode(tx, dn, offset, length);
+	err = dmu_tx_assign(tx, DMU_TX_WAIT);
+	if (err != 0) {
+		dmu_tx_abort(tx);
+		if (buf != NULL)
+			vmem_free(buf, length);
+		dnode_rele(dn, FTAG);
+		return (err);
+	}
+
+	if (clone) {
+		err = dmu_brt_clone(rwa->os, object, offset, length, tx,
+		    &bp, 1);
+		if (err == 0)
+			send_refs_stat_bump(SEND_REFS_STAT_RECV_CLONED);
+	} else {
+		dmu_write_by_dnode(dn, offset, length, buf, tx,
+		    DMU_READ_NO_PREFETCH);
+		send_refs_stat_bump(SEND_REFS_STAT_RECV_COPIED);
+	}
+
+	/* See comment in restore_write. */
+	if (err == 0)
+		save_resume_state(rwa, object, offset, tx);
+	dmu_tx_commit(tx);
+	if (buf != NULL)
+		vmem_free(buf, length);
+	dnode_rele(dn, FTAG);
+	return (err);
+}
+
 static int
 receive_spill(struct receive_writer_arg *rwa, struct drr_spill *drrs,
     abd_t *abd)
@@ -2987,6 +3177,22 @@ receive_read_record(dmu_recv_cookie_t *drc)
 		    drrwe->drr_length);
 		return (err);
 	}
+	case DRR_WRITE_BYREF:
+	{
+		struct drr_write_byref *drrwb =
+		    &drc->drc_rrd->header.drr_u.drr_write_byref;
+
+		/* Reject malformed DRR_WRITE_BYREF before advancing. */
+		err = recv_check_write_byref(drrwb, drc->drc_featureflags,
+		    drc->drc_drrb->drr_fromguid);
+		if (err != 0)
+			return (err);
+
+		err = receive_read_payload_and_next_header(drc, 0, NULL);
+		receive_read_prefetch(drc, drrwb->drr_object,
+		    drrwb->drr_offset, drrwb->drr_length);
+		return (err);
+	}
 	case DRR_FREE:
 	case DRR_REDACT:
 	{
@@ -3221,6 +3427,13 @@ receive_process_record(struct receive_writer_arg *rwa,
 			abd_free(rrd->abd);
 			rrd->abd = NULL;
 		}
+		break;
+	}
+	case DRR_WRITE_BYREF:
+	{
+		struct drr_write_byref *drrwb =
+		    &rrd->header.drr_u.drr_write_byref;
+		err = receive_write_byref(rwa, drrwb);
 		break;
 	}
 	case DRR_WRITE_EMBEDDED:
@@ -3464,6 +3677,7 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 	rwa->raw = drc->drc_raw;
 	rwa->spill = drc->drc_spill;
 	rwa->full = (drc->drc_drr_begin->drr_u.drr_begin.drr_fromguid == 0);
+	rwa->featureflags = drc->drc_featureflags;
 	rwa->os->os_raw_receive = drc->drc_raw;
 	if (drc->drc_heal) {
 		rwa->heal_pio = zio_root(drc->drc_os->os_spa, NULL, NULL,
@@ -3471,6 +3685,41 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 	}
 	list_create(&rwa->write_batch, sizeof (struct receive_record_arg),
 	    offsetof(struct receive_record_arg, node.bqn_node));
+
+	if (drc->drc_featureflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+		dsl_pool_t *dp = dmu_objset_pool(drc->drc_os);
+
+		if (drc->drc_fromsnapobj == 0 || drc->drc_heal ||
+		    drc->drc_raw) {
+			err = SET_ERROR(EINVAL);
+		} else {
+			rwa->ref_dsflags = drc->drc_raw ? 0 :
+			    DS_HOLD_FLAG_DECRYPT;
+			dsl_pool_config_enter(dp, FTAG);
+			err = dsl_dataset_hold_obj_flags(dp,
+			    drc->drc_fromsnapobj, rwa->ref_dsflags, rwa,
+			    &rwa->ref_ds);
+			if (err == 0)
+				dsl_dataset_long_hold(rwa->ref_ds, rwa);
+			dsl_pool_config_exit(dp, FTAG);
+		}
+		if (err == 0) {
+			err = dmu_objset_from_ds(rwa->ref_ds, &rwa->ref_os);
+			rwa->ref_guid = drc->drc_drrb->drr_fromguid;
+		}
+		if (err != 0) {
+			if (rwa->ref_ds != NULL) {
+				dsl_dataset_long_rele(rwa->ref_ds, rwa);
+				dsl_dataset_rele_flags(rwa->ref_ds,
+				    rwa->ref_dsflags, rwa);
+			}
+			cv_destroy(&rwa->cv);
+			mutex_destroy(&rwa->mutex);
+			bqueue_destroy(&rwa->q);
+			list_destroy(&rwa->write_batch);
+			goto out;
+		}
+	}
 
 	(void) thread_create(NULL, 0, receive_writer_thread, rwa, 0, curproc,
 	    TS_RUN, minclsyspri);
@@ -3558,6 +3807,10 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 	mutex_destroy(&rwa->mutex);
 	bqueue_destroy(&rwa->q);
 	list_destroy(&rwa->write_batch);
+	if (rwa->ref_ds != NULL) {
+		dsl_dataset_long_rele(rwa->ref_ds, rwa);
+		dsl_dataset_rele_flags(rwa->ref_ds, rwa->ref_dsflags, rwa);
+	}
 	if (err == 0)
 		err = rwa->err;
 

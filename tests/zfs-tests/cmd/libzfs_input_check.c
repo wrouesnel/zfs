@@ -653,6 +653,7 @@ test_send_new(const char *snapshot, int fd)
 	fnvlist_add_boolean(optional, "embedok");
 	fnvlist_add_boolean(optional, "compressok");
 	fnvlist_add_boolean(optional, "rawok");
+	fnvlist_add_boolean(optional, "refsok");
 
 	/*
 	 * TODO - Resumable send is harder to set up. So we currently
@@ -737,6 +738,7 @@ test_send_space(const char *snapshot1, const char *snapshot2)
 	fnvlist_add_boolean(optional, "embedok");
 	fnvlist_add_boolean(optional, "compressok");
 	fnvlist_add_boolean(optional, "rawok");
+	fnvlist_add_boolean(optional, "refsok");
 
 	IOC_INPUT_TEST(ZFS_IOC_SEND_SPACE, snapshot2, NULL, optional, 0);
 

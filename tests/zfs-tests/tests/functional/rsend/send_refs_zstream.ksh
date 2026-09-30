@@ -1,0 +1,83 @@
+#!/bin/ksh -p
+# SPDX-License-Identifier: CDDL-1.0
+
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# https://opensource.org/license/CDDL-1.0.
+#
+
+. $STF_SUITE/tests/functional/rsend/rsend.kshlib
+
+#
+# Description:
+# Verify that the zstream subcommands handle "zfs send --refs" streams.
+#
+# Strategy:
+# 1. Create a --refs stream with references to dedup hits.
+# 2. zstream dump counts its DRR_WRITE_BYREF records (as many as the
+#    send_refs_records kstat counted) and prints each one with -v.
+# 3. zstream redup refuses it: it cannot expand references to blocks that
+#    are not in the stream.
+# 4. zstream recompress passes the references through; the result is
+#    received and verified.
+#
+
+verify_runnable "both"
+
+sendfs=$POOL/refs_send
+recvfs=$POOL2/refs_recv
+stream=$BACKDIR/refs
+out=$BACKDIR/refs.out
+typeset -i nrec=8
+
+function cleanup
+{
+	datasetexists $sendfs && destroy_dataset $sendfs -r
+	datasetexists $recvfs && destroy_dataset $recvfs -r
+	rm -f $stream $out $out.err $BACKDIR/full
+}
+
+log_assert "zstream handles zfs send --refs streams"
+log_onexit cleanup
+
+log_must zfs create -o dedup=on -o recordsize=$REFS_RECSIZE $sendfs
+mntpnt=$(get_prop mountpoint $sendfs)
+refs_mkfile $mntpnt/f1 $nrec
+log_must zfs snapshot $sendfs@a
+refs_copy $mntpnt/f1 $mntpnt/f2
+refs_mkfile $mntpnt/f3 2
+log_must zfs snapshot $sendfs@b
+log_must eval "zfs send $sendfs@a >$BACKDIR/full"
+log_must eval "zfs recv -u $recvfs <$BACKDIR/full"
+
+typeset -i records=$(send_refs_stat send_refs_records)
+log_must eval "zfs send --refs -i @a $sendfs@b >$stream"
+log_must test $(send_refs_stat send_refs_records) -eq $((records + nrec))
+
+# dump
+log_must eval "zstream dump $stream >$out"
+log_must grep -q "Total DRR_WRITE_BYREF records = $nrec " $out
+log_must eval "zstream dump -v $stream >$out"
+log_must test "$(grep -c '^WRITE_BYREF object = ' $out)" -eq $nrec
+log_must eval "zstream dump <$stream >/dev/null"
+
+# redup
+log_mustnot eval "zstream redup $stream >$out 2>$out.err"
+cat $out.err
+log_must grep -q "zfs send --refs" $out.err
+
+# recompress
+log_must eval "zstream recompress lz4 <$stream >$out"
+log_must stream_has_features $out fromsnap_refs
+log_must test "$(stream_byref_records $out)" -eq $nrec
+log_must eval "zfs recv -u $recvfs <$out"
+refs_cmp_snaps $sendfs $recvfs a b
+log_must zfs rollback -r $recvfs@a
+
+log_pass "zstream handles zfs send --refs streams"
