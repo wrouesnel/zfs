@@ -138,6 +138,12 @@ typedef enum drr_headertype {
 #define	DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS (1 << 27)
 #define	DMU_BACKUP_FEATURE_LONGNAME		(1 << 28)
 #define	DMU_BACKUP_FEATURE_LARGE_MICROZAP	(1 << 29)
+/*
+ * The stream may contain DRR_WRITE_BYREF records whose drr_refguid names
+ * the incremental source snapshot (drr_fromguid); the receiver resolves
+ * them against its own copy of that snapshot.
+ */
+#define	DMU_BACKUP_FEATURE_BYREF_FROMSNAP	(1 << 30)
 
 /*
  * Mask of all supported backup features
@@ -149,7 +155,7 @@ typedef enum drr_headertype {
     DMU_BACKUP_FEATURE_RAW | DMU_BACKUP_FEATURE_HOLDS | \
     DMU_BACKUP_FEATURE_REDACTED | DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS | \
     DMU_BACKUP_FEATURE_ZSTD | DMU_BACKUP_FEATURE_LONGNAME | \
-    DMU_BACKUP_FEATURE_LARGE_MICROZAP)
+    DMU_BACKUP_FEATURE_LARGE_MICROZAP | DMU_BACKUP_FEATURE_BYREF_FROMSNAP)
 
 /* Are all features in the given flag word currently supported? */
 #define	DMU_STREAM_SUPPORTED(x)	(!((x) & ~DMU_BACKUP_FEATURE_MASK))
