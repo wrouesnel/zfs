@@ -46,13 +46,12 @@ delta_mix64(uint64_t x)
 }
 
 static inline uint32_t
-delta_hash(const uint8_t *p)
+delta_hash(const uint8_t *p, int bits)
 {
 	uint64_t h = delta_load64(p) * 0x9e3779b97f4a7c15ULL ^
 	    delta_load64(p + 8) * 0xc2b2ae3d27d4eb4fULL;
 	h ^= h >> 29;
-	return ((uint32_t)((h * 0x165667b19e3779f9ULL) >>
-	    (64 - ZFS_DELTA_HASH_BITS)));
+	return ((uint32_t)((h * 0x165667b19e3779f9ULL) >> (64 - bits)));
 }
 
 static boolean_t
@@ -130,10 +129,17 @@ zfs_delta_encode(const uint8_t *ref, size_t reflen, const uint8_t *tgt,
 {
 	size_t op = 0, j = 0, lit = 0;
 	int64_t shift = 0;
+	int bits = 8;
 
-	memset(htab, 0xff, ZFS_DELTA_HASH_SIZE * sizeof (uint32_t));
+	/*
+	 * Size the hash table to the reference (about one slot per byte),
+	 * so that small blocks do not pay for clearing the whole table.
+	 */
+	while (bits < ZFS_DELTA_HASH_BITS && (1ULL << bits) < reflen)
+		bits++;
+	memset(htab, 0xff, (1ULL << bits) * sizeof (uint32_t));
 	for (size_t i = 0; i + DELTA_MINMATCH <= reflen; i++)
-		htab[delta_hash(ref + i)] = (uint32_t)i;
+		htab[delta_hash(ref + i, bits)] = (uint32_t)i;
 
 	while (j + DELTA_MINMATCH <= tgtlen) {
 		int64_t i;
@@ -144,10 +150,16 @@ zfs_delta_encode(const uint8_t *ref, size_t reflen, const uint8_t *tgt,
 		    delta_match_at(ref, reflen, tgt, j, (int64_t)j + shift)) {
 			i = (int64_t)j + shift;
 		} else {
-			uint32_t h = htab[delta_hash(tgt + j)];
+			uint32_t h = htab[delta_hash(tgt + j, bits)];
 			if (h == UINT32_MAX ||
 			    !delta_match_at(ref, reflen, tgt, j, h)) {
-				j++;
+				/*
+				 * The pending literals alone would overflow
+				 * the patch: give up now rather than at the
+				 * end of the block.
+				 */
+				if (op + (++j - lit) >= outcap)
+					return (0);
 				continue;
 			}
 			i = h;
