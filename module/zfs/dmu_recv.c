@@ -307,7 +307,7 @@ redact_check(dmu_recv_begin_arg_t *drba, dsl_dataset_t *origin)
 	uint64_t origin_num_snaps;
 	dmu_recv_cookie_t *drc = drba->drba_cookie;
 	struct drr_begin *drrb = drc->drc_drrb;
-	int featureflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+	uint64_t featureflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
 	int err = 0;
 	boolean_t ret = B_TRUE;
 	uint64_t *redact_snaps;
