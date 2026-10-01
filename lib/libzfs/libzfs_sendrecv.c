@@ -2207,7 +2207,7 @@ send_prelim_records(zfs_handle_t *zhp, const char *from, int fd,
 	char *packbuf = NULL;
 	size_t buflen = 0;
 	zio_cksum_t zc = { {0} };
-	int featureflags = 0;
+	uint64_t featureflags = 0;
 	/* name of filesystem/volume that contains snapshot we are sending */
 	char tofs[ZFS_MAX_DATASET_NAME_LEN];
 	/* short name of snap we are sending */

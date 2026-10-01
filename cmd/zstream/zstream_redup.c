@@ -234,7 +234,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_BEGIN:
 		{
 			struct drr_begin *drrb = &drr->drr_u.drr_begin;
-			int fflags;
+			uint64_t fflags;
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
 			VERIFY0(begin++);
 			seen = B_TRUE;
