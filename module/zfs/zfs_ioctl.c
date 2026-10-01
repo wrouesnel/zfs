@@ -7419,7 +7419,7 @@ zfs_ioc_space_snaps(const char *lastsnap, nvlist_t *innvl, nvlist_t *outnvl)
  *         source may be sent as DRR_WRITE_BYREF records
  *     (optional) "deltaok" -> (value ignored)
  *         presence indicates blocks similar to blocks of the incremental
- *         source may be sent as DRR_WRITE_DELTA records (implies refsok)
+ *         source may be sent as DRR_WRITE_DELTA records
  *     (optional) "resume_object" and "resume_offset" -> (uint64)
  *         if present, resume send stream from specified object and offset.
  *     (optional) "redactbook" -> (string)

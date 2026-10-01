@@ -19,7 +19,7 @@
 # Verify that the zstream subcommands handle "zfs send --delta" streams.
 #
 # Strategy:
-# 1. Create a --delta stream with both references and deltas.
+# 1. Create a --refs --delta stream with both references and deltas.
 # 2. zstream dump validates it, counts its DRR_WRITE_DELTA records (as
 #    many as the send_delta_records kstat counted) and prints each one
 #    with -v.
@@ -65,7 +65,7 @@ log_must eval "zfs send $sendfs@a >$BACKDIR/full"
 log_must eval "zfs recv -u $recvfs <$BACKDIR/full"
 
 typeset -i records=$(send_refs_stat send_delta_records)
-log_must eval "zfs send -c --delta -i @a $sendfs@b >$stream"
+log_must eval "zfs send -c --refs --delta -i @a $sendfs@b >$stream"
 log_must test $(send_refs_stat send_delta_records) -eq $((records + ndelta))
 log_must stream_has_features $stream fromsnap_refs write_delta
 

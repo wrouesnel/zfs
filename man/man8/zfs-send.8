@@ -32,14 +32,16 @@
 .Nm zfs
 .Cm send
 .Op Fl DLPUVbcehnpsvw
-.Op Fl -refs Ns | Ns Fl -delta
+.Op Fl -refs
+.Op Fl -delta
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
 .Nm zfs
 .Cm send
 .Op Fl DLPUVcensvw
-.Op Fl -refs Ns | Ns Fl -delta
+.Op Fl -refs
+.Op Fl -delta
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Nm zfs
@@ -68,7 +70,8 @@
 .Nm zfs
 .Cm send
 .Op Fl DLPUVbcehnpsvw
-.Op Fl -refs Ns | Ns Fl -delta
+.Op Fl -refs
+.Op Fl -delta
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -314,10 +317,10 @@ references to it, rather than as data.
 See
 .Sx Fromsnap References .
 .It Fl -delta
-Like
-.Fl -refs ,
-and also send blocks that are similar to a block of the incremental source as
-patches against it.
+Send blocks that are similar to a block of the incremental source as patches
+against it.
+May be combined with
+.Fl -refs .
 See
 .Sx Fromsnap References .
 .It Fl s , -skip-missing
@@ -351,7 +354,8 @@ You will be able to receive your streams on future versions of ZFS.
 .Nm zfs
 .Cm send
 .Op Fl DLPVcenvw
-.Op Fl -refs Ns | Ns Fl -delta
+.Op Fl -refs
+.Op Fl -delta
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Xc
@@ -490,10 +494,10 @@ references to it, rather than as data.
 See
 .Sx Fromsnap References .
 .It Fl -delta
-Like
-.Fl -refs ,
-and also send blocks that are similar to a block of the incremental source as
-patches against it.
+Send blocks that are similar to a block of the incremental source as patches
+against it.
+May be combined with
+.Fl -refs .
 See
 .Sx Fromsnap References .
 .It Fl n , -dryrun
@@ -705,9 +709,11 @@ against that block, which the receiver applies to its own copy and verifies.
 This helps when files are modified in place, and when copies of files are
 modified slightly, for example when a package is rebuilt with only embedded
 paths changed.
-Candidate blocks are the same block of the same file in the source, the
-corresponding block of the file that other blocks of the file were found to
-share data with, and blocks with similar content.
+Candidate blocks are the same block of the same file in the source, blocks
+with similar content and, together with
+.Fl -refs ,
+the corresponding block of the file that other blocks of the file were found
+to share data with.
 The latter are found through an index built from the source's data before the
 stream starts, which is bounded by
 .Sy zfs_send_delta_sketch_max_blocks
@@ -721,6 +727,23 @@ A patch is only used if it is at most
 percent of the size of the data it replaces.
 Patched blocks are written in full on the receiver, so they save bandwidth but
 not space.
+.Pp
+The two options are independent, and their costs and benefits differ:
+.Bl -bullet -compact
+.It
+.Fl -refs
+only reads block pointers and makes sending faster, but only helps if the
+source uses deduplication or block cloning and data is copied or rewritten
+unchanged.
+.It
+.Fl -delta
+reads the previous version of each changed block and costs CPU time to compute
+patches, so sending is slower; it helps when data is modified in place, as in
+databases, virtual machine images and volumes, with or without deduplication.
+.It
+Both together suit copies that are then modified, such as rebuilt software
+packages on a deduplicated dataset.
+.El
 .Pp
 References and patches are only used for incremental sends from a snapshot.
 .Fl -refs

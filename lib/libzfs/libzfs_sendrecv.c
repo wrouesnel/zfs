@@ -846,10 +846,10 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 	}
 
 	int error = 0;
-	if ((flags & LZC_SEND_FLAG_REFS) && fromsnap_obj != 0 &&
-	    fromsnap != NULL && fromsnap[0] != '\0') {
+	if ((flags & (LZC_SEND_FLAG_REFS | LZC_SEND_FLAG_DELTA)) &&
+	    fromsnap_obj != 0 && fromsnap != NULL && fromsnap[0] != '\0') {
 		/*
-		 * Fromsnap references are only available through
+		 * Fromsnap references and deltas are only available through
 		 * ZFS_IOC_SEND_NEW, which names the incremental source.
 		 */
 		char fromname[ZFS_MAX_DATASET_NAME_LEN];
