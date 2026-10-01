@@ -712,7 +712,10 @@ The latter are found through an index built from the source's data before the
 stream starts, which is bounded by
 .Sy zfs_send_delta_sketch_max_blocks
 and
-.Sy zfs_send_delta_sketch_max_bytes .
+.Sy zfs_send_delta_sketch_max_bytes ,
+and is only built when enough of the new data is in files that the source
+does not have
+.Pq Sy zfs_send_delta_sketch_min_pct .
 A patch is only used if it is at most
 .Sy zfs_send_delta_max_pct
 percent of the size of the data it replaces.
