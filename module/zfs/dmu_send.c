@@ -129,6 +129,12 @@ static uint_t zfs_send_delta_sibling_scan = 1024;
  */
 static uint64_t zfs_send_delta_sketch_max_blocks = 1ULL << 19;
 static uint64_t zfs_send_delta_sketch_max_bytes = 8ULL << 30;
+/*
+ * The sketch index only helps blocks that have no cheaper candidate,
+ * which are mostly blocks of files that are not in the fromsnap.  Only
+ * build it if at least this percentage of the new data blocks are.
+ */
+static uint_t zfs_send_delta_sketch_min_pct = 10;
 
 static send_refs_stats_t send_refs_stats = {
 	{ "send_refs_candidates",	KSTAT_DATA_UINT64 },
@@ -149,6 +155,7 @@ static send_refs_stats_t send_refs_stats = {
 	{ "send_delta_sketch_blocks",	KSTAT_DATA_UINT64 },
 	{ "send_delta_sketch_truncated", KSTAT_DATA_UINT64 },
 	{ "send_delta_sketch_ns",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_skipped",	KSTAT_DATA_UINT64 },
 	{ "recv_delta_records",		KSTAT_DATA_UINT64 },
 };
 static kstat_t *send_refs_ksp;
@@ -1774,6 +1781,17 @@ typedef struct send_refs {
 	uint64_t	sr_minbirth;	/* oldest candidate physical birth */
 	uint64_t	sr_candidates;
 	uint64_t	sr_resolved;
+	boolean_t	sr_full;	/* zfs_send_refs_max_blocks reached */
+	/*
+	 * For --delta: data blocks with new data (written after the
+	 * fromsnap), and how many of them belong to objects the fromsnap
+	 * does not have.  Only counted if sr_from_os is set.
+	 */
+	objset_t	*sr_from_os;
+	uint64_t	sr_new_blocks;
+	uint64_t	sr_new_blocks_new_obj;
+	uint64_t	sr_obj;		/* object existence cache */
+	boolean_t	sr_obj_in_from;
 } send_refs_t;
 
 static int
@@ -1811,16 +1829,37 @@ refs_candidate_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	send_refs_t *sr = arg;
 	avl_index_t where;
 
-	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp) ||
-	    BP_GET_PHYSICAL_BIRTH(bp) > sr->sr_fromtxg)
+	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp))
 		return (0);
 
+	if (BP_GET_PHYSICAL_BIRTH(bp) > sr->sr_fromtxg) {
+		if (sr->sr_from_os == NULL)
+			return (0);
+		if (sr->sr_obj != zb->zb_object) {
+			dnode_t *dn;
+
+			sr->sr_obj = zb->zb_object;
+			sr->sr_obj_in_from = (dnode_hold(sr->sr_from_os,
+			    zb->zb_object, FTAG, &dn) == 0);
+			if (sr->sr_obj_in_from)
+				dnode_rele(dn, FTAG);
+		}
+		sr->sr_new_blocks++;
+		if (!sr->sr_obj_in_from)
+			sr->sr_new_blocks_new_obj++;
+		return (0);
+	}
+
 	refs_entry_t search = { .re_dva = bp->blk_dva[0] };
-	if (avl_find(&sr->sr_index, &search, &where) != NULL)
+	if (sr->sr_full || avl_find(&sr->sr_index, &search, &where) != NULL)
 		return (0);
 	if (sr->sr_candidates >= zfs_send_refs_max_blocks) {
 		REFS_STAT_BUMP(send_refs_truncated);
-		return (SET_ERROR(ERANGE));
+		/* Keep counting new data blocks if asked to. */
+		if (sr->sr_from_os == NULL)
+			return (SET_ERROR(ERANGE));
+		sr->sr_full = B_TRUE;
+		return (0);
 	}
 
 	refs_entry_t *re = kmem_alloc(sizeof (*re), KM_SLEEP);
@@ -1915,7 +1954,8 @@ send_refs_fromsnap_rele(dsl_dataset_t *ds, const void *tag)
  */
 static send_refs_t *
 send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
-    uint64_t fromtxg)
+    uint64_t fromtxg, boolean_t count_new, uint64_t *new_blocksp,
+    uint64_t *new_blocks_new_objp)
 {
 	send_refs_t *sr = kmem_zalloc(sizeof (*sr), KM_SLEEP);
 	int err;
@@ -1924,11 +1964,18 @@ send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
 	    offsetof(refs_entry_t, re_node));
 	sr->sr_fromtxg = fromtxg;
 	sr->sr_minbirth = UINT64_MAX;
+	sr->sr_obj = UINT64_MAX;
+	if (count_new && dmu_objset_from_ds(fromds, &sr->sr_from_os) != 0)
+		sr->sr_from_os = NULL;
 
 	err = traverse_dataset(to_ds, fromtxg,
 	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, refs_candidate_cb, sr);
 	if (err == ERANGE)
 		err = 0;
+	if (new_blocksp != NULL) {
+		*new_blocksp = sr->sr_new_blocks;
+		*new_blocks_new_objp = sr->sr_new_blocks_new_obj;
+	}
 	if (err == 0 && sr->sr_candidates > 0) {
 		err = traverse_dataset(fromds, sr->sr_minbirth - 1,
 		    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA,
@@ -2125,7 +2172,8 @@ send_delta_destroy(send_delta_t *sd)
  * duration of the send.  Returns NULL if the fromsnap cannot be used.
  */
 static send_delta_t *
-send_delta_create(dsl_dataset_t *fromds, send_refs_t *refs)
+send_delta_create(dsl_dataset_t *fromds, send_refs_t *refs,
+    uint64_t new_blocks, uint64_t new_blocks_new_obj)
 {
 	send_delta_t *sd;
 	objset_t *ref_os;
@@ -2144,8 +2192,20 @@ send_delta_create(dsl_dataset_t *fromds, send_refs_t *refs)
 	    sizeof (delta_sketch_entry_t),
 	    offsetof(delta_sketch_entry_t, dse_node));
 
-	if (zfs_send_delta_sketch_max_blocks != 0 &&
-	    zfs_send_delta_sketch_max_bytes != 0) {
+	/*
+	 * When nearly all new data is in files the fromsnap already has (a
+	 * database or image modified in place), the same-object candidate
+	 * covers it, and reading the whole fromsnap for the sketch index
+	 * would cost far more than it saves.
+	 */
+	boolean_t sketch = zfs_send_delta_sketch_max_blocks != 0 &&
+	    zfs_send_delta_sketch_max_bytes != 0;
+	if (sketch && (new_blocks == 0 || new_blocks_new_obj * 100 <
+	    new_blocks * MIN(zfs_send_delta_sketch_min_pct, 100))) {
+		REFS_STAT_BUMP(send_delta_sketch_skipped);
+		sketch = B_FALSE;
+	}
+	if (sketch) {
 		hrtime_t start = gethrtime();
 		int err = traverse_dataset(fromds, 0,
 		    TRAVERSE_PRE | TRAVERSE_PREFETCH, delta_sketch_cb, sd);
@@ -3369,11 +3429,15 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	 * held until the end.
 	 */
 	if (refs_fromds != NULL) {
-		refs = send_refs_build(to_ds, refs_fromds, fromtxg);
+		uint64_t new_blocks = 0, new_blocks_new_obj = 0;
+
+		refs = send_refs_build(to_ds, refs_fromds, fromtxg,
+		    dspp->deltaok, &new_blocks, &new_blocks_new_obj);
 		if (refs != NULL)
 			featureflags |= DMU_BACKUP_FEATURE_FROMSNAP_REFS;
 		if (dspp->deltaok)
-			dsc.dsc_delta = send_delta_create(refs_fromds, refs);
+			dsc.dsc_delta = send_delta_create(refs_fromds, refs,
+			    new_blocks, new_blocks_new_obj);
 		if (dsc.dsc_delta != NULL) {
 			featureflags |= DMU_BACKUP_FEATURE_WRITE_DELTA;
 		} else {
@@ -4059,6 +4123,10 @@ ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sibling_scan, UINT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_max_blocks, U64, ZMOD_RW,
 	"Maximum fromsnap blocks in the WRITE_DELTA similarity index");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_min_pct, UINT, ZMOD_RW,
+	"Build the WRITE_DELTA similarity index only if this share of new "
+	"data blocks belongs to files not in the fromsnap");
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_max_bytes, U64, ZMOD_RW,
 	"Maximum fromsnap data read to build the WRITE_DELTA similarity index");

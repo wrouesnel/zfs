@@ -25,10 +25,12 @@
 # 2. Overwrite a few bytes in some records of the file; snapshot @b.
 # 3. Send -i @a @b with and without --delta.  The --delta stream has the
 #    WRITE_DELTA feature and one DRR_WRITE_DELTA record per modified record
-#    (all "same" hits), and is much smaller.
+#    (all "same" hits), and is much smaller.  All new data is in a file
+#    the fromsnap has, so the similarity index is not built.
 # 4. Receive it; the received snapshots are identical to the sent ones.
-# 5. An incremental with only new data still has the WRITE_DELTA feature,
-#    without DRR_WRITE_DELTA records, and is received.
+# 5. An incremental with only new data (a new file) still has the
+#    WRITE_DELTA feature, without DRR_WRITE_DELTA records, and is received;
+#    the similarity index is built for it.
 # 6. send -I --delta sends deltas too.
 #
 
@@ -69,6 +71,8 @@ log_must zfs snapshot $sendfs@b
 
 typeset -i records=$(send_refs_stat send_delta_records)
 typeset -i same=$(send_refs_stat send_delta_same_hits)
+typeset -i skipped=$(send_refs_stat send_delta_sketch_skipped)
+typeset -i sketched=$(send_refs_stat send_delta_sketch_blocks)
 log_must eval "zfs send --delta -i @a $sendfs@b >$delta"
 log_must eval "zfs send -i @a $sendfs@b >$plain"
 log_must stream_has_features $delta write_delta
@@ -77,6 +81,8 @@ log_must test "$(stream_delta_records $delta)" -eq $ndelta
 log_must test "$(stream_delta_records $plain)" -eq 0
 log_must test $(send_refs_stat send_delta_records) -eq $((records + ndelta))
 log_must test $(send_refs_stat send_delta_same_hits) -eq $((same + ndelta))
+log_must test $(send_refs_stat send_delta_sketch_skipped) -eq $((skipped + 1))
+log_must test $(send_refs_stat send_delta_sketch_blocks) -eq $sketched
 
 typeset -i delta_size=$(stat_size $delta)
 typeset -i plain_size=$(stat_size $plain)
@@ -91,7 +97,11 @@ refs_cmp_snaps $sendfs $recvfs a b
 # Nothing similar: the feature is set, but there are no delta records.
 refs_mkfile $mntpnt/f2 4
 log_must zfs snapshot $sendfs@c
+skipped=$(send_refs_stat send_delta_sketch_skipped)
+sketched=$(send_refs_stat send_delta_sketch_blocks)
 log_must eval "zfs send --delta -i @b $sendfs@c >$delta"
+log_must test $(send_refs_stat send_delta_sketch_skipped) -eq $skipped
+log_must test $(send_refs_stat send_delta_sketch_blocks) -gt $sketched
 log_must stream_has_features $delta write_delta
 log_must test "$(stream_delta_records $delta)" -eq 0
 log_must eval "zfs recv -u $recvfs <$delta"

@@ -2240,6 +2240,15 @@ per send.
 Each uses about 200 bytes of memory.
 Zero disables the index.
 .
+.It Sy zfs_send_delta_sketch_min_pct Ns = Ns Sy 10 Ns % Pq uint
+.Nm zfs Cm send Fl -delta
+only builds its similarity index if at least this percentage of the blocks with
+new data belong to files that the incremental source does not have.
+Blocks of files that the source has are usually covered by the same block of
+the same file, so for a database or image modified in place the index would
+cost a read of the whole source for little gain.
+Zero always builds the index.
+.
 .It Sy zfs_send_delta_sketch_max_bytes Ns = Ns Sy 8589934592 Ns B Po 8 GiB Pc Pq u64
 Maximum amount of data of the incremental source read to build the similarity
 index of
