@@ -348,10 +348,10 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DLPbcehnpsVvw] [--refs|--delta] "
+		return (gettext("\tsend [-DLPbcehnpsVvw] [--refs] [--delta] "
 		    "[-i|-I snapshot]\n"
 		    "\t     [-R [-X dataset[,dataset]...]]     <snapshot>\n"
-		    "\tsend [-DnVvPLecw] [--refs|--delta] "
+		    "\tsend [-DnVvPLecw] [--refs] [--delta] "
 		    "[-i snapshot|bookmark]\n"
 		    "\t     <filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
@@ -4884,7 +4884,6 @@ zfs_do_send(int argc, char **argv)
 			flags.refs = B_TRUE;
 			break;
 		case ZFS_OPTION_SEND_DELTA:
-			flags.refs = B_TRUE;
 			flags.delta = B_TRUE;
 			break;
 		case ':':
@@ -4975,7 +4974,7 @@ zfs_do_send(int argc, char **argv)
 		if (fromname != NULL || flags.replicate || flags.props ||
 		    flags.doall || flags.backup ||
 		    flags.holds || flags.largeblock || flags.embed_data ||
-		    flags.compress || flags.raw || flags.refs ||
+		    flags.compress || flags.raw || flags.refs || flags.delta ||
 		    redactbook != NULL) {
 			free(excludes.list);
 
@@ -5000,7 +4999,9 @@ zfs_do_send(int argc, char **argv)
 		return (1);
 	}
 
-	if (flags.refs) {
+	if (flags.refs || flags.delta) {
+		const char *opt = !flags.delta ? "--refs" :
+		    !flags.refs ? "--delta" : "--refs and --delta";
 		const char *why = NULL;
 
 		if (flags.raw)
@@ -5012,8 +5013,7 @@ zfs_do_send(int argc, char **argv)
 		if (why != NULL) {
 			free(excludes.list);
 			(void) fprintf(stderr, gettext("Error: %s cannot "
-			    "be used with %s.\n"),
-			    flags.delta ? "--delta" : "--refs", why);
+			    "be used with %s.\n"), opt, why);
 			return (1);
 		}
 	}

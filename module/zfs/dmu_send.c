@@ -1781,6 +1781,7 @@ typedef struct send_refs {
 	uint64_t	sr_minbirth;	/* oldest candidate physical birth */
 	uint64_t	sr_candidates;
 	uint64_t	sr_resolved;
+	boolean_t	sr_collect;	/* collect reference candidates */
 	boolean_t	sr_full;	/* zfs_send_refs_max_blocks reached */
 	/*
 	 * For --delta: data blocks with new data (written after the
@@ -1851,7 +1852,8 @@ refs_candidate_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	}
 
 	refs_entry_t search = { .re_dva = bp->blk_dva[0] };
-	if (sr->sr_full || avl_find(&sr->sr_index, &search, &where) != NULL)
+	if (!sr->sr_collect || sr->sr_full ||
+	    avl_find(&sr->sr_index, &search, &where) != NULL)
 		return (0);
 	if (sr->sr_candidates >= zfs_send_refs_max_blocks) {
 		REFS_STAT_BUMP(send_refs_truncated);
@@ -1954,8 +1956,8 @@ send_refs_fromsnap_rele(dsl_dataset_t *ds, const void *tag)
  */
 static send_refs_t *
 send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
-    uint64_t fromtxg, boolean_t count_new, uint64_t *new_blocksp,
-    uint64_t *new_blocks_new_objp)
+    uint64_t fromtxg, boolean_t collect, boolean_t count_new,
+    uint64_t *new_blocksp, uint64_t *new_blocks_new_objp)
 {
 	send_refs_t *sr = kmem_zalloc(sizeof (*sr), KM_SLEEP);
 	int err;
@@ -1965,6 +1967,7 @@ send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
 	sr->sr_fromtxg = fromtxg;
 	sr->sr_minbirth = UINT64_MAX;
 	sr->sr_obj = UINT64_MAX;
+	sr->sr_collect = collect;
 	if (count_new && dmu_objset_from_ds(fromds, &sr->sr_from_os) != 0)
 		sr->sr_from_os = NULL;
 
@@ -2053,7 +2056,7 @@ dmu_send_read_done(zio_t *zio)
  *    in place;
  *  - sibling: the same offset in the fromsnap file that other blocks of
  *    this file are sent as references to (see send_refs_t), for files
- *    that were copied and then modified;
+ *    that were copied and then modified; only with --refs;
  *  - sketch: a fromsnap block sharing a content super-feature, from an
  *    index built by reading the fromsnap before the stream starts, bounded
  *    by zfs_send_delta_sketch_max_blocks and zfs_send_delta_sketch_max_bytes.
@@ -3387,11 +3390,12 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	dsl_dataset_long_hold(to_ds, FTAG);
 
 	/*
-	 * Fromsnap references are only used for plain incrementals from an
-	 * existing snapshot: not raw, encrypted or redacted.  Otherwise the
-	 * request is ignored and a regular stream is sent.
+	 * Fromsnap references and deltas are only used for plain
+	 * incrementals from an existing snapshot: not raw, encrypted or
+	 * redacted.  Otherwise the request is ignored and a regular stream
+	 * is sent.
 	 */
-	if (dspp->refsok && fromtxg != 0 && !dspp->rawok &&
+	if ((dspp->refsok || dspp->deltaok) && fromtxg != 0 && !dspp->rawok &&
 	    !os->os_encrypted && dspp->redactbook == NULL &&
 	    ancestor_zb->zbm_redaction_obj == 0 &&
 	    dspp->numfromredactsnaps == NUM_SNAPS_NOT_REDACTED) {
@@ -3425,14 +3429,16 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	/*
 	 * The stream is only marked as using fromsnap references if there
 	 * are any, so that it stays receivable by older software otherwise.
-	 * Deltas read the fromsnap while the stream is generated, so it stays
-	 * held until the end.
+	 * Without --refs the scan of the changed blocks only counts them for
+	 * --delta.  Deltas read the fromsnap while the stream is generated,
+	 * so it stays held until the end.
 	 */
 	if (refs_fromds != NULL) {
 		uint64_t new_blocks = 0, new_blocks_new_obj = 0;
 
 		refs = send_refs_build(to_ds, refs_fromds, fromtxg,
-		    dspp->deltaok, &new_blocks, &new_blocks_new_obj);
+		    dspp->refsok, dspp->deltaok, &new_blocks,
+		    &new_blocks_new_obj);
 		if (refs != NULL)
 			featureflags |= DMU_BACKUP_FEATURE_FROMSNAP_REFS;
 		if (dspp->deltaok)
@@ -3753,8 +3759,7 @@ dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
 	dspp.resumeoff = resumeoff;
 	dspp.rawok = rawok;
 	dspp.savedok = savedok;
-	/* Deltas build on the reference index, so --delta implies --refs. */
-	dspp.refsok = refsok || deltaok;
+	dspp.refsok = refsok;
 	dspp.deltaok = deltaok;
 
 	if (fromsnap != NULL && strpbrk(fromsnap, "@#") == NULL)

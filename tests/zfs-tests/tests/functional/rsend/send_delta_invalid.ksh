@@ -77,6 +77,8 @@ send_refused "--delta cannot be used with raw sends" -w --delta $sendfs@b
 # Full sends, also replication streams.
 send_refused "--delta cannot be used with full sends" --delta $sendfs@b
 send_refused "--delta cannot be used with full sends" --delta -R $sendfs@b
+send_refused "--refs and --delta cannot be used with full sends" \
+	--refs --delta $sendfs@b
 
 # Redacted sends.
 log_must zfs clone $sendfs@b $rclone
