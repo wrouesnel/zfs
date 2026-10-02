@@ -16,17 +16,18 @@
 
 #
 # Description:
-# Verify that "zfs send --refs" works when the incremental source's objset
-# is not yet open on the receiving side, which opens it itself and must do
-# so with the pool config lock held.
+# Verify that "zfs send --refs" and "--delta" work when the incremental
+# source's objset is not yet open, on the sending and the receiving side:
+# both open it themselves and must do so with the pool config lock held.
 #
 # Strategy:
 # 1. Create a dedup=on filesystem with a file of random data, snapshot @a
 #    and replicate @a to another pool.
-# 2. Copy the file (references); snapshot @b.
-# 3. Export and import both pools, so that no objset of either is open,
-#    then send --refs -i @a @b, receive it and compare the received
-#    snapshots with the sent ones.
+# 2. Copy the file (references) and modify a few records of the original
+#    in place (deltas); snapshot @b.
+# 3. For --refs, --delta and both: export and import both pools, so that
+#    no objset of either is open, then send -i @a @b, receive it and
+#    compare the received snapshots with the sent ones.
 #
 
 verify_runnable "both"
@@ -51,8 +52,8 @@ function reimport_pools
 	log_must zpool import $POOL
 }
 
-log_assert "zfs send --refs works with the incremental source's objset not" \
-	"yet open"
+log_assert "zfs send --refs and --delta work with the incremental source's" \
+	"objsets not yet open"
 log_onexit cleanup
 
 log_must zfs create -o dedup=on -o recordsize=$REFS_RECSIZE $sendfs
@@ -63,13 +64,17 @@ log_must eval "zfs send $sendfs@a >$BACKDIR/full"
 log_must eval "zfs recv -u $recvfs <$BACKDIR/full"
 
 refs_copy $mntpnt/f1 $mntpnt/f2
+refs_poke $mntpnt/f1 1
+refs_poke $mntpnt/f1 5
 log_must zfs snapshot $sendfs@b
 
-reimport_pools
-log_must eval "zfs send --refs -i @a $sendfs@b >$stream"
-log_must stream_has_features $stream fromsnap_refs
-log_must eval "zfs recv -u $recvfs <$stream"
-refs_cmp_snaps $sendfs $recvfs a b
+for opts in "--refs" "--delta" "--refs --delta"; do
+	reimport_pools
+	log_must eval "zfs send $opts -i @a $sendfs@b >$stream"
+	log_must eval "zfs recv -u $recvfs <$stream"
+	refs_cmp_snaps $sendfs $recvfs a b
+	log_must zfs rollback -r $recvfs@a
+done
 
-log_pass "zfs send --refs works with the incremental source's objset not" \
-	"yet open"
+log_pass "zfs send --refs and --delta work with the incremental source's" \
+	"objsets not yet open"

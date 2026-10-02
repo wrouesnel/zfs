@@ -1956,8 +1956,8 @@ send_refs_fromsnap_rele(dsl_dataset_t *ds, const void *tag)
  */
 static send_refs_t *
 send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
-    uint64_t fromtxg, boolean_t collect, boolean_t count_new,
-    uint64_t *new_blocksp, uint64_t *new_blocks_new_objp)
+    objset_t *from_os, uint64_t fromtxg, boolean_t collect,
+    boolean_t count_new, uint64_t *new_blocksp, uint64_t *new_blocks_new_objp)
 {
 	send_refs_t *sr = kmem_zalloc(sizeof (*sr), KM_SLEEP);
 	int err;
@@ -1968,8 +1968,8 @@ send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
 	sr->sr_minbirth = UINT64_MAX;
 	sr->sr_obj = UINT64_MAX;
 	sr->sr_collect = collect;
-	if (count_new && dmu_objset_from_ds(fromds, &sr->sr_from_os) != 0)
-		sr->sr_from_os = NULL;
+	if (count_new)
+		sr->sr_from_os = from_os;
 
 	err = traverse_dataset(to_ds, fromtxg,
 	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, refs_candidate_cb, sr);
@@ -2175,14 +2175,10 @@ send_delta_destroy(send_delta_t *sd)
  * duration of the send.  Returns NULL if the fromsnap cannot be used.
  */
 static send_delta_t *
-send_delta_create(dsl_dataset_t *fromds, send_refs_t *refs,
+send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
     uint64_t new_blocks, uint64_t new_blocks_new_obj)
 {
 	send_delta_t *sd;
-	objset_t *ref_os;
-
-	if (dmu_objset_from_ds(fromds, &ref_os) != 0)
-		return (NULL);
 
 	sd = kmem_zalloc(sizeof (*sd), KM_SLEEP);
 	sd->sd_ref_os = ref_os;
@@ -3316,6 +3312,7 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	boolean_t book_resuming = resuming;
 	send_refs_t *refs = NULL;
 	dsl_dataset_t *refs_fromds = NULL;
+	objset_t *refs_from_os = NULL;
 
 	dsl_dataset_t *to_ds = dspp->to_ds;
 	zfs_bookmark_phys_t *ancestor_zb = &dspp->ancestor_zb;
@@ -3401,6 +3398,12 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	    dspp->numfromredactsnaps == NUM_SNAPS_NOT_REDACTED) {
 		refs_fromds = send_refs_fromsnap_hold(dp, to_ds, ancestor_zb,
 		    FTAG);
+		/* Open its objset now: that needs the pool config lock. */
+		if (refs_fromds != NULL &&
+		    dmu_objset_from_ds(refs_fromds, &refs_from_os) != 0) {
+			send_refs_fromsnap_rele(refs_fromds, FTAG);
+			refs_fromds = NULL;
+		}
 	}
 
 	from_arg = kmem_zalloc(sizeof (*from_arg), KM_SLEEP);
@@ -3436,14 +3439,15 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	if (refs_fromds != NULL) {
 		uint64_t new_blocks = 0, new_blocks_new_obj = 0;
 
-		refs = send_refs_build(to_ds, refs_fromds, fromtxg,
-		    dspp->refsok, dspp->deltaok, &new_blocks,
+		refs = send_refs_build(to_ds, refs_fromds, refs_from_os,
+		    fromtxg, dspp->refsok, dspp->deltaok, &new_blocks,
 		    &new_blocks_new_obj);
 		if (refs != NULL)
 			featureflags |= DMU_BACKUP_FEATURE_FROMSNAP_REFS;
 		if (dspp->deltaok)
-			dsc.dsc_delta = send_delta_create(refs_fromds, refs,
-			    new_blocks, new_blocks_new_obj);
+			dsc.dsc_delta = send_delta_create(refs_fromds,
+			    refs_from_os, refs, new_blocks,
+			    new_blocks_new_obj);
 		if (dsc.dsc_delta != NULL) {
 			featureflags |= DMU_BACKUP_FEATURE_WRITE_DELTA;
 		} else {
