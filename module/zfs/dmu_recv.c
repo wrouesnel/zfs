@@ -3856,14 +3856,16 @@ dmu_recv_stream(dmu_recv_cookie_t *drc, offset_t *voffp)
 			err = dsl_dataset_hold_obj_flags(dp,
 			    drc->drc_fromsnapobj, rwa->ref_dsflags, rwa,
 			    &rwa->ref_ds);
-			if (err == 0)
+			if (err == 0) {
 				dsl_dataset_long_hold(rwa->ref_ds, rwa);
+				/* Opening the objset needs the config lock. */
+				err = dmu_objset_from_ds(rwa->ref_ds,
+				    &rwa->ref_os);
+			}
 			dsl_pool_config_exit(dp, FTAG);
 		}
-		if (err == 0) {
-			err = dmu_objset_from_ds(rwa->ref_ds, &rwa->ref_os);
+		if (err == 0)
 			rwa->ref_guid = drc->drc_drrb->drr_fromguid;
-		}
 		if (err != 0) {
 			if (rwa->ref_ds != NULL) {
 				dsl_dataset_long_rele(rwa->ref_ds, rwa);
