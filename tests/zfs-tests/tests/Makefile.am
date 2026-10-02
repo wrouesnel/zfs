@@ -2248,6 +2248,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_refs_invalid.ksh \
 	functional/rsend/send_refs_max_blocks.ksh \
 	functional/rsend/send_refs_no_refs.ksh \
+	functional/rsend/send_refs_reimport.ksh \
 	functional/rsend/send_refs_replicate.ksh \
 	functional/rsend/send_refs_resume.ksh \
 	functional/rsend/send_refs_zstream.ksh \
