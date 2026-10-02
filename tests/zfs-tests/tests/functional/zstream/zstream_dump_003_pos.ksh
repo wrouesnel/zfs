@@ -74,10 +74,11 @@ for stem in "${streams[@]}"; do
 
 	# Remove the lines that are new additions:
 	# 1. "nvlist encoding = ..." lines
-	# 2. Summary lines for DRR_OBJECT_RANGE and DRR_REDACT
+	# 2. Summary lines for DRR_OBJECT_RANGE, DRR_REDACT and DRR_WRITE_DELTA
 	grep -v '^nvlist encoding = ' "$new_dump" | \
 	    grep -v 'Total DRR_OBJECT_RANGE records' | \
-	    grep -v 'Total DRR_REDACT records' > "$filtered"
+	    grep -v 'Total DRR_REDACT records' | \
+	    grep -v 'Total DRR_WRITE_DELTA records' > "$filtered"
 
 	if ! diff -q "$old_dump" "$filtered" > /dev/null 2>&1; then
 		log_note "MISMATCH after filtering: $stem (abbrev $abbrev)"
