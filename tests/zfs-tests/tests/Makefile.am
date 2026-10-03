@@ -1217,6 +1217,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_export/zpool_export_005_neg.ksh \
 	functional/cli_root/zpool_export/zpool_export_parallel_admin.ksh \
 	functional/cli_root/zpool_export/zpool_export_parallel_pos.ksh \
+	functional/cli_root/zpool_export/zpool_export_stats_pos.ksh \
 	functional/cli_root/zpool_get/cleanup.ksh \
 	functional/cli_root/zpool_get/setup.ksh \
 	functional/cli_root/zpool_get/vdev_get_001_pos.ksh \
@@ -2194,6 +2195,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/rsend_031_pos.ksh \
 	functional/rsend/rsend-exclude_001_pos.ksh \
 	functional/rsend/rsend-exclude_002_pos.ksh \
+	functional/rsend/send-c_compressed_arc_disabled.ksh \
 	functional/rsend/send-c_embedded_blocks.ksh \
 	functional/rsend/send-c_incremental.ksh \
 	functional/rsend/send-c_longname.ksh \

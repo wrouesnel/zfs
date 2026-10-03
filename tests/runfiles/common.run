@@ -465,7 +465,8 @@ tags = ['functional', 'cli_root', 'zpool_events']
 [tests/functional/cli_root/zpool_export]
 tests = ['zpool_export_001_pos', 'zpool_export_002_pos',
     'zpool_export_003_neg', 'zpool_export_004_pos',
-    'zpool_export_005_neg', 'zpool_export_parallel_pos', 'zpool_export_parallel_admin']
+    'zpool_export_005_neg', 'zpool_export_parallel_pos', 'zpool_export_parallel_admin',
+    'zpool_export_stats_pos']
 tags = ['functional', 'cli_root', 'zpool_export']
 
 [tests/functional/cli_root/zpool_get]
@@ -1019,7 +1020,8 @@ tests = ['recv_dedup', 'recv_dedup_encrypted_zvol',
     'send-c_lz4_disabled', 'send-c_recv_lz4_disabled',
     'send-c_mixed_compression', 'send-c_stream_size_estimate',
     'send-c_embedded_blocks', 'send-c_resume', 'send-cpL_varied_recsize',
-    'send-c_recv_dedup', 'send-L_toggle', 'send_encrypted_incremental',
+    'send-c_recv_dedup', 'send-c_compressed_arc_disabled', 'send-L_toggle',
+    'send_encrypted_incremental',
     'send_encrypted_freeobjects', 'send_encrypted_hierarchy',
     'send_encrypted_holds',
     'send_encrypted_props', 'send_encrypted_truncated_files',
