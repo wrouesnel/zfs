@@ -2104,6 +2104,8 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_split_large_block.ksh \
 	functional/rsend/send-wR_encrypted_zvol.ksh \
 	functional/rsend/setup.ksh \
+	functional/rsend/zstream_resume_001_pos.ksh \
+	functional/rsend/zstream_resume_002_neg.ksh \
 	functional/scrub_mirror/cleanup.ksh \
 	functional/scrub_mirror/scrub_mirror_001_pos.ksh \
 	functional/scrub_mirror/scrub_mirror_002_pos.ksh \
