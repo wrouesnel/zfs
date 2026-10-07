@@ -104,6 +104,8 @@ int recv_check_drr_spill(const struct drr_spill *, spa_t *, boolean_t raw,
     uint64_t featureflags, char *errbuf, size_t errbuflen);
 int recv_check_drr_write_byref(const struct drr_write_byref *, spa_t *,
     uint64_t featureflags, uint64_t fromguid, char *errbuf, size_t errbuflen);
+int recv_check_drr_write_delta(const struct drr_write_delta *, spa_t *,
+    uint64_t featureflags, uint64_t fromguid, char *errbuf, size_t errbuflen);
 int recv_check_drr_write(const struct drr_write *, spa_t *, boolean_t raw,
     uint64_t featureflags, char *errbuf, size_t errbuflen);
 int recv_check_drr_write_embedded(const struct drr_write_embedded *, spa_t *,

@@ -726,6 +726,7 @@ function stream_has_features
 	feature[compressed]="400000"
 	feature[longname]="10000000"
 	feature[fromsnap_refs]="80000000"
+	feature[write_delta]="100000000"
 
 	typeset flag known derived=0
 	for flag in "$@"; do
@@ -888,6 +889,35 @@ function refs_copy
 function stream_byref_records
 {
 	zstream dump $1 | awk '/Total DRR_WRITE_BYREF records/ { print $5 }'
+}
+
+#
+# Print the number of DRR_WRITE_DELTA records in a send stream.
+#
+# $1 stream file
+#
+function stream_delta_records
+{
+	zstream dump $1 | awk '/Total DRR_WRITE_DELTA records/ { print $5 }'
+}
+
+#
+# Overwrite a few bytes of a record of a file in place.
+#
+# $1 file
+# $2 record
+# $3 offset in the record (default 1000)
+# $4 number of bytes (default 8)
+#
+function refs_poke
+{
+	typeset file=$1
+	typeset -i rec=$2
+	typeset -i off=${3:-1000}
+	typeset -i len=${4:-8}
+
+	log_must eval "dd if=/dev/urandom of=$file bs=1 count=$len \\
+	    seek=$((rec * REFS_RECSIZE + off)) conv=notrunc 2>/dev/null"
 }
 
 #

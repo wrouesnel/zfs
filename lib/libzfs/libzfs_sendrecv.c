@@ -750,7 +750,7 @@ typedef struct send_dump_data {
 	uint64_t prevsnap_obj;
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
-	boolean_t large_block, compress, raw, holds, refs;
+	boolean_t large_block, compress, raw, holds, refs, delta;
 	boolean_t progressastitle;
 	int outfd;
 	boolean_t err;
@@ -846,10 +846,10 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 	}
 
 	int error = 0;
-	if ((flags & LZC_SEND_FLAG_REFS) && fromsnap_obj != 0 &&
-	    fromsnap != NULL && fromsnap[0] != '\0') {
+	if ((flags & (LZC_SEND_FLAG_REFS | LZC_SEND_FLAG_DELTA)) &&
+	    fromsnap_obj != 0 && fromsnap != NULL && fromsnap[0] != '\0') {
 		/*
-		 * Fromsnap references are only available through
+		 * Fromsnap references and deltas are only available through
 		 * ZFS_IOC_SEND_NEW, which names the incremental source.
 		 */
 		char fromname[ZFS_MAX_DATASET_NAME_LEN];
@@ -980,7 +980,7 @@ timer_delete_cleanup(void *timer)
 }
 
 /*
- * Describe what a send preparing its stream (--refs) is doing,
+ * Describe what a send preparing its stream (--refs or --delta) is doing,
  * for the progress output: readable text, or for parsable output
  * tab-separated keyword, progress and expected total (0 if unknown).
  * Empty once the stream is being written.
@@ -992,12 +992,13 @@ send_phase_describe(zfs_send_phase_t phase, uint64_t done, uint64_t total,
 	static const char *const keywords[] = {
 		[ZFS_SEND_PHASE_REFS_SCAN] = "refs_scan",
 		[ZFS_SEND_PHASE_REFS_RESOLVE] = "refs_resolve",
+		[ZFS_SEND_PHASE_DELTA_INDEX] = "delta_index",
 	};
-	char dbuf[16];
+	char dbuf[16], tbuf[16];
 
 	buf[0] = '\0';
 	if (phase <= ZFS_SEND_PHASE_STREAM ||
-	    phase > ZFS_SEND_PHASE_REFS_RESOLVE)
+	    phase > ZFS_SEND_PHASE_DELTA_INDEX)
 		return;
 	if (parsable) {
 		(void) snprintf(buf, len, "\t%s\t%llu\t%llu", keywords[phase],
@@ -1014,6 +1015,14 @@ send_phase_describe(zfs_send_phase_t phase, uint64_t done, uint64_t total,
 		zfs_nicenum(done, dbuf, sizeof (dbuf));
 		(void) snprintf(buf, len, dgettext(TEXT_DOMAIN,
 		    " (locating references: %s blocks scanned)"), dbuf);
+		break;
+	case ZFS_SEND_PHASE_DELTA_INDEX:
+		zfs_nicebytes(done, dbuf, sizeof (dbuf));
+		zfs_nicebytes(total, tbuf, sizeof (tbuf));
+		(void) snprintf(buf, len, dgettext(TEXT_DOMAIN,
+		    " (building similarity index: %s of %s read, %llu%%)"),
+		    dbuf, tbuf, (u_longlong_t)(total == 0 ? 0 :
+		    MIN(done * 100 / total, 100)));
 		break;
 	default:
 		break;
@@ -1259,6 +1268,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		flags |= LZC_SEND_FLAG_RAW;
 	if (sdd->refs)
 		flags |= LZC_SEND_FLAG_REFS;
+	if (sdd->delta)
+		flags |= LZC_SEND_FLAG_DELTA;
 
 	if (!sdd->doall && !isfromsnap && !istosnap) {
 		if (sdd->replicate) {
@@ -1683,6 +1694,8 @@ lzc_flags_from_sendflags(const sendflags_t *flags)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
 	if (flags->refs)
 		lzc_flags |= LZC_SEND_FLAG_REFS;
+	if (flags->delta)
+		lzc_flags |= LZC_SEND_FLAG_DELTA;
 
 	return (lzc_flags);
 }
@@ -1886,6 +1899,8 @@ lzc_flags_from_resume_nvl(nvlist_t *resume_nvl)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
 	if (nvlist_exists(resume_nvl, "refsok"))
 		lzc_flags |= LZC_SEND_FLAG_REFS;
+	if (nvlist_exists(resume_nvl, "deltaok"))
+		lzc_flags |= LZC_SEND_FLAG_DELTA;
 
 	return (lzc_flags);
 }
@@ -2494,6 +2509,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
 	sdd.refs = flags->refs;
+	sdd.delta = flags->delta;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
 	sdd.raw = flags->raw;
@@ -4228,6 +4244,16 @@ recv_skip(libzfs_handle_t *hdl, int fd, boolean_t byteswap)
 			}
 			(void) recv_read(hdl, fd, buf,
 			    P2ROUNDUP(drr->drr_u.drr_write_embedded.drr_psize,
+			    8), B_FALSE, NULL);
+			break;
+		case DRR_WRITE_DELTA:
+			if (byteswap) {
+				drr->drr_u.drr_write_delta.drr_patchlen =
+				    BSWAP_64(drr->drr_u.drr_write_delta.
+				    drr_patchlen);
+			}
+			(void) recv_read(hdl, fd, buf,
+			    P2ROUNDUP(drr->drr_u.drr_write_delta.drr_patchlen,
 			    8), B_FALSE, NULL);
 			break;
 		case DRR_OBJECT_RANGE:

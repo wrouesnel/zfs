@@ -126,6 +126,7 @@ COMMON_H = \
 	sys/zfs_debug.h \
 	sys/zfs_delay.h \
 	sys/zfs_file.h \
+	sys/zfs_delta.h \
 	sys/zfs_fuid.h \
 	sys/zfs_impl.h \
 	sys/zfs_project.h \

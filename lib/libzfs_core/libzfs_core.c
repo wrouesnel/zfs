@@ -900,6 +900,8 @@ lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "savedok");
 	if (flags & LZC_SEND_FLAG_REFS)
 		fnvlist_add_boolean(args, "refsok");
+	if (flags & LZC_SEND_FLAG_DELTA)
+		fnvlist_add_boolean(args, "deltaok");
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -1084,9 +1086,10 @@ lzc_send_progress(const char *snapname, int fd, uint64_t *bytes_written,
 
 /*
  * Like lzc_send_progress(), and also report which phase the send is in.
- * While --refs prepares the stream, *phase is not ZFS_SEND_PHASE_STREAM,
- * nothing has been written yet, and *phase_done and *phase_total (0 if
- * unknown) report how far the phase has got, in blocks scanned.
+ * While --refs or --delta prepare the stream, *phase is not
+ * ZFS_SEND_PHASE_STREAM, nothing has been written yet, and *phase_done and
+ * *phase_total (0 if unknown) report how far the phase has got: in blocks
+ * for the reference scans and bytes for the similarity index.
  */
 int
 lzc_send_progress_phase(const char *snapname, int fd, uint64_t *bytes_written,

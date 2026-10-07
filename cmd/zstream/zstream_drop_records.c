@@ -52,6 +52,10 @@ chain_drop_records(void *item_in, void *context)
 		object = drr->drr_u.drr_write_byref.drr_object;
 		offset = drr->drr_u.drr_write_byref.drr_offset;
 		record_type = "WRITE_BYREF";
+	} else if (drr->drr_type == DRR_WRITE_DELTA) {
+		object = drr->drr_u.drr_write_delta.drr_object;
+		offset = drr->drr_u.drr_write_delta.drr_offset;
+		record_type = "WRITE_DELTA";
 	} else {
 		return (D_OK);
 	}
