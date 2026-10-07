@@ -1006,6 +1006,10 @@ tests = ['recv_dedup', 'recv_dedup_encrypted_zvol', 'rsend_001_pos',
     'send_partial_dataset', 'send_invalid',
     'send_large_blocks_incremental', 'send_large_blocks_initial',
     'send_large_microzap_incremental', 'send_large_microzap_transitive',
+    'send_delta_compressed', 'send_delta_corrupt', 'send_delta_inplace',
+    'send_delta_interrupt', 'send_delta_invalid', 'send_delta_max_pct',
+    'send_delta_progress', 'send_delta_resume', 'send_delta_sibling',
+    'send_delta_sketch', 'send_delta_zstream',
     'send_doall', 'send_raw_spill_block', 'send_raw_ashift',
     'send_raw_large_blocks', 'send_leak_keymaps']
 tags = ['functional', 'rsend']

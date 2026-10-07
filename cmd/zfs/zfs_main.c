@@ -140,7 +140,8 @@ static int zfs_do_help(int argc, char **argv);
 
 enum zfs_options {
 	ZFS_OPTION_JSON_NUMS_AS_INT = 1024,
-	ZFS_OPTION_SEND_REFS
+	ZFS_OPTION_SEND_REFS,
+	ZFS_OPTION_SEND_DELTA
 };
 
 /*
@@ -347,11 +348,12 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DLPbcehnpsVvw] [--refs] "
+		return (gettext("\tsend [-DLPbcehnpsVvw] [--refs] [--delta] "
 		    "[-i|-I snapshot]\n"
 		    "\t     [-R [-X dataset[,dataset]...]]     <snapshot>\n"
-		    "\tsend [-DnVvPLecw] [--refs] [-i snapshot|bookmark] "
-		    "<filesystem|volume|snapshot>\n"
+		    "\tsend [-DnVvPLecw] [--refs] [--delta] "
+		    "[-i snapshot|bookmark]\n"
+		    "\t     <filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
 		    "\tsend [-nVvPe] -t <receive_resume_token>\n"
@@ -4787,6 +4789,7 @@ zfs_do_send(int argc, char **argv)
 		{"saved",	no_argument,		NULL, 'S'},
 		{"exclude",	required_argument,	NULL, 'X'},
 		{"refs",	no_argument,	NULL, ZFS_OPTION_SEND_REFS},
+		{"delta",	no_argument,	NULL, ZFS_OPTION_SEND_DELTA},
 		{0, 0, 0, 0}
 	};
 
@@ -4880,6 +4883,9 @@ zfs_do_send(int argc, char **argv)
 		case ZFS_OPTION_SEND_REFS:
 			flags.refs = B_TRUE;
 			break;
+		case ZFS_OPTION_SEND_DELTA:
+			flags.delta = B_TRUE;
+			break;
 		case ':':
 			/*
 			 * If a parameter was not passed, optopt contains the
@@ -4968,7 +4974,7 @@ zfs_do_send(int argc, char **argv)
 		if (fromname != NULL || flags.replicate || flags.props ||
 		    flags.doall || flags.backup ||
 		    flags.holds || flags.largeblock || flags.embed_data ||
-		    flags.compress || flags.raw || flags.refs ||
+		    flags.compress || flags.raw || flags.refs || flags.delta ||
 		    redactbook != NULL) {
 			free(excludes.list);
 
@@ -4993,7 +4999,9 @@ zfs_do_send(int argc, char **argv)
 		return (1);
 	}
 
-	if (flags.refs) {
+	if (flags.refs || flags.delta) {
+		const char *opt = !flags.delta ? "--refs" :
+		    !flags.refs ? "--delta" : "--refs and --delta";
 		const char *why = NULL;
 
 		if (flags.raw)
@@ -5004,8 +5012,8 @@ zfs_do_send(int argc, char **argv)
 			why = gettext("full sends; use -i or -I");
 		if (why != NULL) {
 			free(excludes.list);
-			(void) fprintf(stderr, gettext("Error: --refs cannot "
-			    "be used with %s.\n"), why);
+			(void) fprintf(stderr, gettext("Error: %s cannot "
+			    "be used with %s.\n"), opt, why);
 			return (1);
 		}
 	}

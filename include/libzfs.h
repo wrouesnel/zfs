@@ -848,6 +848,9 @@ typedef struct sendflags {
 
 	/* reference blocks already in the incremental source (--refs) */
 	boolean_t refs;
+
+	/* patch blocks similar to ones in the incremental source (--delta) */
+	boolean_t delta;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);

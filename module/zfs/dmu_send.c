@@ -66,6 +66,8 @@
 #ifdef _KERNEL
 #include <sys/zfs_vfsops.h>
 #endif
+#include <sys/zfs_delta.h>
+#include <sys/zio_compress.h>
 
 /* Set this tunable to TRUE to replace corrupt data with 0x2f5baddb10c */
 static int zfs_send_corrupt_data = B_FALSE;
@@ -112,6 +114,28 @@ static int zfs_send_unmodified_spill_blocks = B_TRUE;
  */
 static uint64_t zfs_send_refs_max_blocks = 1ULL << 20;
 
+/*
+ * zfs send --delta: a changed block is sent as a patch against a similar
+ * fromsnap block when the patch is at most this percentage of the size of
+ * the WRITE record it replaces.
+ */
+static uint_t zfs_send_delta_max_pct = 50;
+/* Blocks of a file scanned to find the fromsnap file it was copied from. */
+static uint_t zfs_send_delta_sibling_scan = 1024;
+/*
+ * The similarity (sketch) index reads fromsnap data.  These bound the
+ * number of blocks it covers (about 200 bytes of memory each) and the
+ * data read to build it; zero for either disables it.
+ */
+static uint64_t zfs_send_delta_sketch_max_blocks = 1ULL << 19;
+static uint64_t zfs_send_delta_sketch_max_bytes = 8ULL << 30;
+/*
+ * The sketch index only helps blocks that have no cheaper candidate,
+ * which are mostly blocks of files that are not in the fromsnap.  Only
+ * build it if at least this percentage of the new data blocks are.
+ */
+static uint_t zfs_send_delta_sketch_min_pct = 10;
+
 static send_refs_stats_t send_refs_stats = {
 	{ "send_refs_candidates",	KSTAT_DATA_UINT64 },
 	{ "send_refs_resolved",		KSTAT_DATA_UINT64 },
@@ -120,6 +144,19 @@ static send_refs_stats_t send_refs_stats = {
 	{ "send_refs_bytes",		KSTAT_DATA_UINT64 },
 	{ "recv_refs_cloned",		KSTAT_DATA_UINT64 },
 	{ "recv_refs_copied",		KSTAT_DATA_UINT64 },
+	{ "send_delta_attempts",	KSTAT_DATA_UINT64 },
+	{ "send_delta_records",		KSTAT_DATA_UINT64 },
+	{ "send_delta_payload_bytes",	KSTAT_DATA_UINT64 },
+	{ "send_delta_logical_bytes",	KSTAT_DATA_UINT64 },
+	{ "send_delta_same_hits",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sibling_hits",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_hits",	KSTAT_DATA_UINT64 },
+	{ "send_delta_rejected",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_blocks",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_truncated", KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_ns",	KSTAT_DATA_UINT64 },
+	{ "send_delta_sketch_skipped",	KSTAT_DATA_UINT64 },
+	{ "recv_delta_records",		KSTAT_DATA_UINT64 },
 };
 static kstat_t *send_refs_ksp;
 
@@ -137,6 +174,9 @@ send_refs_stat_bump(send_refs_stat_t stat)
 		break;
 	case SEND_REFS_STAT_RECV_COPIED:
 		REFS_STAT_BUMP(recv_refs_copied);
+		break;
+	case SEND_REFS_STAT_RECV_DELTA:
+		REFS_STAT_BUMP(recv_delta_records);
 		break;
 	}
 }
@@ -275,6 +315,8 @@ typedef struct dmu_send_cookie {
 	uint64_t dsc_toguid;
 	uint64_t dsc_fromtxg;
 	uint64_t dsc_fromguid;
+	/* zfs send --delta state; see send_delta_try() */
+	struct send_delta *dsc_delta;
 	int dsc_err;
 	dmu_pendop_t dsc_pending_op;
 	uint64_t dsc_featureflags;
@@ -287,6 +329,8 @@ typedef struct dmu_send_cookie {
 } dmu_send_cookie_t;
 
 static int do_dump(dmu_send_cookie_t *dscp, struct send_range *range);
+static int send_delta_try(dmu_send_cookie_t *dscp, struct send_range *range,
+    char *data, boolean_t *sentp);
 
 static void
 range_free(struct send_range *range)
@@ -1090,6 +1134,16 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 
 		uint64_t offset = range->start_blkid * srdp->datablksz;
 
+		if (dscp->dsc_delta != NULL && data != NULL &&
+		    !(srdp->datablksz > SPA_OLD_MAXBLOCKSIZE &&
+		    !(dscp->dsc_featureflags &
+		    DMU_BACKUP_FEATURE_LARGE_BLOCKS))) {
+			boolean_t sent;
+			err = send_delta_try(dscp, range, data, &sent);
+			if (err != 0 || sent)
+				return (err);
+		}
+
 		/*
 		 * If we have large blocks stored on disk but the send flags
 		 * don't allow us to send large blocks, we split the data from
@@ -1683,6 +1737,8 @@ struct send_reader_thread_arg {
 	int error;
 	/* fromsnap references for --refs sends, or NULL */
 	struct send_refs *refs;
+	/* the fromsnap, for prefetching --delta reference blocks, or NULL */
+	objset_t *delta_ref_os;
 };
 
 /*
@@ -1712,11 +1768,11 @@ struct send_reader_thread_arg {
 #define	REFS_UNRESOLVED	UINT64_MAX
 
 /*
- * Building the reference index reads the delta's block pointers before
- * anything is written.  Stop if the caller is interrupted by a signal
- * meanwhile, or if the stream's output can no longer be written (its
- * reader went away), which nothing would otherwise notice until the first
- * write.
+ * Building the reference and similarity indexes reads the delta's block
+ * pointers, and for --delta possibly much of the fromsnap, before anything
+ * is written.  Stop if the caller is interrupted by a signal meanwhile, or
+ * if the stream's output can no longer be written (its reader went away),
+ * which nothing would otherwise notice until the first write.
  */
 typedef struct send_setup_check {
 	dmu_send_outparams_t	*ssc_dso;
@@ -1735,6 +1791,7 @@ static const char *const send_phase_names[] = {
 	[ZFS_SEND_PHASE_STREAM] = "stream",
 	[ZFS_SEND_PHASE_REFS_SCAN] = "refs scan",
 	[ZFS_SEND_PHASE_REFS_RESOLVE] = "refs resolve",
+	[ZFS_SEND_PHASE_DELTA_INDEX] = "delta index",
 };
 
 /*
@@ -1802,7 +1859,19 @@ typedef struct send_refs {
 	uint64_t	sr_minbirth;	/* oldest candidate physical birth */
 	uint64_t	sr_candidates;
 	uint64_t	sr_resolved;
+	boolean_t	sr_collect;	/* collect reference candidates */
+	boolean_t	sr_full;	/* zfs_send_refs_max_blocks reached */
 	send_setup_check_t *sr_check;
+	/*
+	 * For --delta: data blocks with new data (written after the
+	 * fromsnap), and how many of them belong to objects the fromsnap
+	 * does not have.  Only counted if sr_from_os is set.
+	 */
+	objset_t	*sr_from_os;
+	uint64_t	sr_new_blocks;
+	uint64_t	sr_new_blocks_new_obj;
+	uint64_t	sr_obj;		/* object existence cache */
+	boolean_t	sr_obj_in_from;
 } send_refs_t;
 
 static int
@@ -1845,16 +1914,38 @@ refs_candidate_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 		return (err);
 	if (bp != NULL)
 		send_setup_progress(sr->sr_check, 1);
-	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp) ||
-	    BP_GET_PHYSICAL_BIRTH(bp) > sr->sr_fromtxg)
+	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp))
 		return (0);
 
+	if (BP_GET_PHYSICAL_BIRTH(bp) > sr->sr_fromtxg) {
+		if (sr->sr_from_os == NULL)
+			return (0);
+		if (sr->sr_obj != zb->zb_object) {
+			dnode_t *dn;
+
+			sr->sr_obj = zb->zb_object;
+			sr->sr_obj_in_from = (dnode_hold(sr->sr_from_os,
+			    zb->zb_object, FTAG, &dn) == 0);
+			if (sr->sr_obj_in_from)
+				dnode_rele(dn, FTAG);
+		}
+		sr->sr_new_blocks++;
+		if (!sr->sr_obj_in_from)
+			sr->sr_new_blocks_new_obj++;
+		return (0);
+	}
+
 	refs_entry_t search = { .re_dva = bp->blk_dva[0] };
-	if (avl_find(&sr->sr_index, &search, &where) != NULL)
+	if (!sr->sr_collect || sr->sr_full ||
+	    avl_find(&sr->sr_index, &search, &where) != NULL)
 		return (0);
 	if (sr->sr_candidates >= zfs_send_refs_max_blocks) {
 		REFS_STAT_BUMP(send_refs_truncated);
-		return (SET_ERROR(ERANGE));
+		/* Keep counting new data blocks if asked to. */
+		if (sr->sr_from_os == NULL)
+			return (SET_ERROR(ERANGE));
+		sr->sr_full = B_TRUE;
+		return (0);
 	}
 
 	refs_entry_t *re = kmem_alloc(sizeof (*re), KM_SLEEP);
@@ -1955,7 +2046,9 @@ send_refs_fromsnap_rele(dsl_dataset_t *ds, const void *tag)
  */
 static int
 send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
-    uint64_t fromtxg, send_setup_check_t *ssc, send_refs_t **srp)
+    objset_t *from_os, uint64_t fromtxg, boolean_t collect,
+    boolean_t count_new, uint64_t *new_blocksp, uint64_t *new_blocks_new_objp,
+    send_setup_check_t *ssc, send_refs_t **srp)
 {
 	send_refs_t *sr = kmem_zalloc(sizeof (*sr), KM_SLEEP);
 	int err;
@@ -1964,13 +2057,21 @@ send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
 	    offsetof(refs_entry_t, re_node));
 	sr->sr_fromtxg = fromtxg;
 	sr->sr_minbirth = UINT64_MAX;
+	sr->sr_obj = UINT64_MAX;
+	sr->sr_collect = collect;
 	sr->sr_check = ssc;
+	if (count_new)
+		sr->sr_from_os = from_os;
 
 	send_setup_phase(ssc, ZFS_SEND_PHASE_REFS_SCAN, 0);
 	err = traverse_dataset(to_ds, fromtxg,
 	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, refs_candidate_cb, sr);
 	if (err == ERANGE)
 		err = 0;
+	if (new_blocksp != NULL) {
+		*new_blocksp = sr->sr_new_blocks;
+		*new_blocks_new_objp = sr->sr_new_blocks_new_obj;
+	}
 	if (err == 0 && sr->sr_candidates > 0) {
 		send_setup_phase(ssc, ZFS_SEND_PHASE_REFS_RESOLVE, 0);
 		err = traverse_dataset(fromds, sr->sr_minbirth - 1,
@@ -2040,6 +2141,476 @@ dmu_send_read_done(zio_t *zio)
 	mutex_exit(&range->sru.data.lock);
 }
 
+/*
+ * Partial block deltas (zfs send --delta).
+ *
+ * A changed block that is not identical to any fromsnap block may still be
+ * mostly the same as one: a file edited in place, or a copy of a file with
+ * a few bytes changed.  Such blocks are sent as DRR_WRITE_DELTA records,
+ * a patch (sys/zfs_delta.h) against a fromsnap block, which the receiver
+ * reads from its own copy of the fromsnap.  Reference candidates are tried
+ * in this order until one yields a small enough patch:
+ *
+ *  - same: the same object and offset in the fromsnap, for files modified
+ *    in place;
+ *  - sibling: the same offset in the fromsnap file that other blocks of
+ *    this file are sent as references to (see send_refs_t), for files
+ *    that were copied and then modified; only with --refs;
+ *  - sketch: a fromsnap block sharing a content super-feature, from an
+ *    index built by reading the fromsnap before the stream starts, bounded
+ *    by zfs_send_delta_sketch_max_blocks and zfs_send_delta_sketch_max_bytes.
+ */
+typedef struct delta_sketch_entry {
+	avl_node_t	dse_node;
+	uint64_t	dse_sf;
+	uint64_t	dse_object;
+	uint64_t	dse_offset;
+	uint64_t	dse_length;
+} delta_sketch_entry_t;
+
+typedef struct send_delta {
+	objset_t	*sd_ref_os;	/* the fromsnap */
+	send_refs_t	*sd_refs;	/* may be NULL */
+	send_setup_check_t *sd_check;
+	avl_tree_t	sd_sketch;
+	uint64_t	sd_sketch_blocks;
+	uint64_t	sd_sketch_bytes;
+	uint32_t	*sd_htab;	/* zfs_delta_encode() scratch */
+	uint64_t	sd_sib_object;	/* delta_sibling() cache */
+	uint64_t	sd_sib_ref;
+	/* delta_same_exists() cache: the fromsnap's dnode for an object */
+	uint64_t	sd_same_object;
+	boolean_t	sd_same_found;
+	dmu_object_type_t sd_same_type;
+	uint64_t	sd_same_blksz;
+	uint64_t	sd_same_maxblkid;
+	/* buffers reused across blocks, all sd_bufsize bytes */
+	uint64_t	sd_bufsize;
+	uint8_t		*sd_refbuf;
+	uint8_t		*sd_tgtbuf;
+	uint8_t		*sd_patchbuf;
+} send_delta_t;
+
+typedef enum delta_ref_kind {
+	DELTA_REF_SAME,
+	DELTA_REF_SIBLING,
+	DELTA_REF_SKETCH,
+	DELTA_REF_KINDS
+} delta_ref_kind_t;
+
+static int
+delta_sketch_compare(const void *a, const void *b)
+{
+	const delta_sketch_entry_t *ea = a, *eb = b;
+	return (TREE_CMP(ea->dse_sf, eb->dse_sf));
+}
+
+static int
+delta_sketch_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
+{
+	(void) zilog, (void) dnp;
+	send_delta_t *sd = arg;
+	arc_flags_t aflags = ARC_FLAG_WAIT;
+	arc_buf_t *abuf = NULL;
+	uint64_t sf[ZFS_DELTA_NSF];
+	int err;
+
+	if ((err = send_setup_check(sd->sd_check)) != 0)
+		return (err);
+	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp) ||
+	    BP_IS_PROTECTED(bp))
+		return (0);
+	if (sd->sd_sketch_blocks >= zfs_send_delta_sketch_max_blocks ||
+	    sd->sd_sketch_bytes >= zfs_send_delta_sketch_max_bytes) {
+		REFS_STAT_BUMP(send_delta_sketch_truncated);
+		return (SET_ERROR(ERANGE));
+	}
+
+	/* A block that cannot be read is simply left out of the index. */
+	if (arc_read(NULL, spa, bp, arc_getbuf_func, &abuf,
+	    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &aflags, zb) != 0)
+		return (0);
+	sd->sd_sketch_blocks++;
+	sd->sd_sketch_bytes += BP_GET_LSIZE(bp);
+	send_setup_progress(sd->sd_check, BP_GET_LSIZE(bp));
+	boolean_t ok = zfs_delta_sketch(abuf->b_data, BP_GET_LSIZE(bp), sf);
+	arc_buf_destroy(abuf, &abuf);
+	if (!ok)
+		return (0);
+
+	for (int i = 0; i < ZFS_DELTA_NSF; i++) {
+		delta_sketch_entry_t search = { .dse_sf = sf[i] };
+		avl_index_t where;
+
+		if (avl_find(&sd->sd_sketch, &search, &where) != NULL)
+			continue;
+		delta_sketch_entry_t *dse = kmem_alloc(sizeof (*dse),
+		    KM_SLEEP);
+		dse->dse_sf = sf[i];
+		dse->dse_object = zb->zb_object;
+		dse->dse_offset = zb->zb_blkid * BP_GET_LSIZE(bp);
+		dse->dse_length = BP_GET_LSIZE(bp);
+		avl_insert(&sd->sd_sketch, dse, where);
+	}
+	return (0);
+}
+
+static void
+send_delta_destroy(send_delta_t *sd)
+{
+	delta_sketch_entry_t *dse;
+	void *cookie = NULL;
+
+	while ((dse = avl_destroy_nodes(&sd->sd_sketch, &cookie)) != NULL)
+		kmem_free(dse, sizeof (*dse));
+	avl_destroy(&sd->sd_sketch);
+	vmem_free(sd->sd_htab, ZFS_DELTA_HASH_SIZE * sizeof (uint32_t));
+	if (sd->sd_bufsize != 0) {
+		vmem_free(sd->sd_refbuf, sd->sd_bufsize);
+		vmem_free(sd->sd_tgtbuf, sd->sd_bufsize);
+		vmem_free(sd->sd_patchbuf, sd->sd_bufsize);
+	}
+	kmem_free(sd, sizeof (*sd));
+}
+
+/*
+ * Set up delta sends against fromds, which the caller keeps held for the
+ * duration of the send.  Returns the error from send_setup_check() if the
+ * send must stop while building the similarity index, and 0 otherwise.
+ */
+static int
+send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
+    uint64_t new_blocks, uint64_t new_blocks_new_obj,
+    send_setup_check_t *ssc, send_delta_t **sdp)
+{
+	send_delta_t *sd;
+
+	sd = kmem_zalloc(sizeof (*sd), KM_SLEEP);
+	sd->sd_ref_os = ref_os;
+	sd->sd_refs = refs;
+	sd->sd_check = ssc;
+	sd->sd_sib_object = UINT64_MAX;
+	sd->sd_same_object = UINT64_MAX;
+	sd->sd_htab = vmem_alloc(ZFS_DELTA_HASH_SIZE * sizeof (uint32_t),
+	    KM_SLEEP);
+	avl_create(&sd->sd_sketch, delta_sketch_compare,
+	    sizeof (delta_sketch_entry_t),
+	    offsetof(delta_sketch_entry_t, dse_node));
+
+	/*
+	 * When nearly all new data is in files the fromsnap already has (a
+	 * database or image modified in place), the same-object candidate
+	 * covers it, and reading the whole fromsnap for the sketch index
+	 * would cost far more than it saves.
+	 */
+	boolean_t sketch = zfs_send_delta_sketch_max_blocks != 0 &&
+	    zfs_send_delta_sketch_max_bytes != 0;
+	if (sketch && (new_blocks == 0 || new_blocks_new_obj * 100 <
+	    new_blocks * MIN(zfs_send_delta_sketch_min_pct, 100))) {
+		REFS_STAT_BUMP(send_delta_sketch_skipped);
+		sketch = B_FALSE;
+	}
+	if (sketch) {
+		hrtime_t start = gethrtime();
+
+		send_setup_phase(ssc, ZFS_SEND_PHASE_DELTA_INDEX,
+		    MIN(dsl_dataset_phys(fromds)->ds_uncompressed_bytes,
+		    zfs_send_delta_sketch_max_bytes));
+		int err = traverse_dataset(fromds, 0,
+		    TRAVERSE_PRE | TRAVERSE_PREFETCH, delta_sketch_cb, sd);
+		REFS_STAT_INCR(send_delta_sketch_blocks, sd->sd_sketch_blocks);
+		REFS_STAT_INCR(send_delta_sketch_ns, gethrtime() - start);
+		if (ssc->ssc_err != 0) {
+			send_delta_destroy(sd);
+			*sdp = NULL;
+			return (ssc->ssc_err);
+		}
+		/* A partial index is still useful. */
+		if (err != 0 && err != ERANGE)
+			REFS_STAT_BUMP(send_delta_sketch_truncated);
+	}
+	*sdp = sd;
+	return (0);
+}
+
+/*
+ * Find the fromsnap object that other blocks of this (tosnap) object are
+ * sent as references to at the same offsets: for a file that was copied
+ * and then partly changed, that is the file it was copied from.  Returns
+ * 0 if there is none.  Blocks arrive in object order, so cache the answer.
+ */
+static uint64_t
+delta_sibling(dmu_send_cookie_t *dscp, uint64_t object)
+{
+	send_delta_t *sd = dscp->dsc_delta;
+	send_refs_t *sr = sd->sd_refs;
+	dnode_t *dn;
+
+	if (sd->sd_sib_object == object)
+		return (sd->sd_sib_ref);
+	sd->sd_sib_object = object;
+	sd->sd_sib_ref = 0;
+	if (sr == NULL || dnode_hold(dscp->dsc_os, object, FTAG, &dn) != 0)
+		return (0);
+
+	rw_enter(&dn->dn_struct_rwlock, RW_READER);
+	uint64_t lsize = dn->dn_datablksz;
+	uint64_t maxblk = MIN(dn->dn_maxblkid,
+	    (uint64_t)zfs_send_delta_sibling_scan);
+	for (uint64_t blkid = 0; blkid <= maxblk; blkid++) {
+		blkptr_t bp;
+
+		if (dbuf_dnode_findbp(dn, 0, blkid, &bp, NULL, NULL) != 0 ||
+		    !refs_bp_eligible(&bp) ||
+		    BP_GET_PHYSICAL_BIRTH(&bp) > sr->sr_fromtxg)
+			continue;
+		refs_entry_t search = { .re_dva = bp.blk_dva[0] };
+		refs_entry_t *re = avl_find(&sr->sr_index, &search, NULL);
+		if (re != NULL && re->re_object != REFS_UNRESOLVED &&
+		    re->re_birth == BP_GET_PHYSICAL_BIRTH(&bp) &&
+		    re->re_offset == blkid * lsize) {
+			sd->sd_sib_ref = re->re_object;
+			break;
+		}
+	}
+	rw_exit(&dn->dn_struct_rwlock);
+	dnode_rele(dn, FTAG);
+	return (sd->sd_sib_ref);
+}
+
+/*
+ * Whether the fromsnap has a block of the same kind at this object and
+ * offset (the object may since have been freed or reallocated).
+ */
+static boolean_t
+delta_same_exists(send_delta_t *sd, uint64_t object, uint64_t offset,
+    dmu_object_type_t type, uint64_t lsize)
+{
+	/* Blocks arrive in object order, so look each object up once. */
+	if (sd->sd_same_object != object) {
+		dnode_t *dn;
+
+		sd->sd_same_object = object;
+		sd->sd_same_found = (dnode_hold(sd->sd_ref_os, object, FTAG,
+		    &dn) == 0);
+		if (sd->sd_same_found) {
+			sd->sd_same_type = dn->dn_type;
+			sd->sd_same_blksz = dn->dn_datablksz;
+			sd->sd_same_maxblkid = dn->dn_maxblkid;
+			dnode_rele(dn, FTAG);
+		}
+	}
+	return (sd->sd_same_found && sd->sd_same_type == type &&
+	    sd->sd_same_blksz == lsize &&
+	    offset / lsize <= sd->sd_same_maxblkid);
+}
+
+static int
+dump_write_delta(dmu_send_cookie_t *dscp, struct send_range *range,
+    const uint8_t *tgt, uint64_t refobject, uint64_t refoffset,
+    uint64_t reflength, uint8_t *patch, size_t patchlen)
+{
+	struct srd *srdp = &range->sru.data;
+	struct drr_write_delta *drrwd =
+	    &(dscp->dsc_drr->drr_u.drr_write_delta);
+	uint64_t object = range->object;
+	uint64_t lsize = srdp->datablksz;
+	uint64_t offset = range->start_blkid * lsize;
+	size_t payload = P2ROUNDUP(patchlen, 8);
+
+	/* Same ordering rules as dmu_dump_write(). */
+	ASSERT(object > dscp->dsc_last_data_object ||
+	    (object == dscp->dsc_last_data_object &&
+	    offset > dscp->dsc_last_data_offset));
+	dscp->dsc_last_data_object = object;
+	dscp->dsc_last_data_offset = offset + lsize - 1;
+
+	if (dscp->dsc_pending_op != PENDING_NONE) {
+		if (dump_record(dscp, NULL, 0) != 0)
+			return (SET_ERROR(EINTR));
+		dscp->dsc_pending_op = PENDING_NONE;
+	}
+
+	memset(dscp->dsc_drr, 0, sizeof (dmu_replay_record_t));
+	dscp->dsc_drr->drr_type = DRR_WRITE_DELTA;
+	drrwd->drr_object = object;
+	drrwd->drr_offset = offset;
+	drrwd->drr_length = lsize;
+	drrwd->drr_toguid = dscp->dsc_toguid;
+	drrwd->drr_refguid = dscp->dsc_fromguid;
+	drrwd->drr_refobject = refobject;
+	drrwd->drr_refoffset = refoffset;
+	drrwd->drr_reflength = reflength;
+	drrwd->drr_patchlen = patchlen;
+	drrwd->drr_type = srdp->obj_type;
+	fletcher_4_native(tgt, lsize, NULL, &drrwd->drr_cksum);
+	memset(patch + patchlen, 0, payload - patchlen);
+
+	if (dump_record(dscp, patch, payload) != 0)
+		return (SET_ERROR(EINTR));
+
+	REFS_STAT_BUMP(send_delta_records);
+	REFS_STAT_INCR(send_delta_payload_bytes, payload);
+	REFS_STAT_INCR(send_delta_logical_bytes, lsize);
+	return (0);
+}
+
+/*
+ * Make the reusable buffers at least size bytes.
+ */
+static void
+send_delta_bufs(send_delta_t *sd, uint64_t size)
+{
+	if (size <= sd->sd_bufsize)
+		return;
+	if (sd->sd_bufsize != 0) {
+		vmem_free(sd->sd_refbuf, sd->sd_bufsize);
+		vmem_free(sd->sd_tgtbuf, sd->sd_bufsize);
+		vmem_free(sd->sd_patchbuf, sd->sd_bufsize);
+	}
+	sd->sd_bufsize = size;
+	sd->sd_refbuf = vmem_alloc(size, KM_SLEEP);
+	sd->sd_tgtbuf = vmem_alloc(size, KM_SLEEP);
+	sd->sd_patchbuf = vmem_alloc(size, KM_SLEEP);
+}
+
+/*
+ * Encode tgt against one candidate reference and, if the patch fits in
+ * cap bytes, send it.  Returns the record's error, with *sentp set if a
+ * record was sent.
+ */
+static int
+send_delta_try_ref(dmu_send_cookie_t *dscp, struct send_range *range,
+    const uint8_t *tgt, size_t cap, uint64_t refobject, uint64_t refoffset,
+    uint64_t reflength, delta_ref_kind_t kind, boolean_t *sentp)
+{
+	send_delta_t *sd = dscp->dsc_delta;
+	uint64_t lsize = range->sru.data.datablksz;
+	size_t n = 0;
+
+	send_delta_bufs(sd, MAX(reflength, lsize));
+	if (dmu_read(sd->sd_ref_os, refobject, refoffset, reflength,
+	    sd->sd_refbuf, DMU_READ_PREFETCH) == 0) {
+		n = zfs_delta_encode(sd->sd_refbuf, reflength, tgt, lsize,
+		    sd->sd_patchbuf, cap, sd->sd_htab);
+	}
+	if (n == 0) {
+		REFS_STAT_BUMP(send_delta_rejected);
+		return (0);
+	}
+
+	int err = dump_write_delta(dscp, range, tgt, refobject, refoffset,
+	    reflength, sd->sd_patchbuf, n);
+	if (err != 0)
+		return (err);
+	*sentp = B_TRUE;
+	switch (kind) {
+	case DELTA_REF_SAME:
+		REFS_STAT_BUMP(send_delta_same_hits);
+		break;
+	case DELTA_REF_SIBLING:
+		REFS_STAT_BUMP(send_delta_sibling_hits);
+		break;
+	default:
+		REFS_STAT_BUMP(send_delta_sketch_hits);
+		break;
+	}
+	return (0);
+}
+
+/*
+ * Try to send a data block as a patch against a similar fromsnap block.
+ * Sets *sentp if a DRR_WRITE_DELTA record was sent.  The cheap candidates
+ * are tried first; the block's sketch is only computed if they fail.
+ */
+static int
+send_delta_try(dmu_send_cookie_t *dscp, struct send_range *range, char *data,
+    boolean_t *sentp)
+{
+	send_delta_t *sd = dscp->dsc_delta;
+	struct srd *srdp = &range->sru.data;
+	const blkptr_t *bp = &srdp->bp;
+	uint64_t lsize = srdp->datablksz;
+	uint64_t offset = range->start_blkid * lsize;
+	const uint8_t *tgt = (const uint8_t *)data;
+	int err = 0;
+
+	*sentp = B_FALSE;
+	if (range->start_blkid == DMU_SPILL_BLKID || BP_IS_EMBEDDED(bp) ||
+	    BP_IS_HOLE(bp) || BP_IS_PROTECTED(bp) || BP_SHOULD_BYTESWAP(bp) ||
+	    DMU_OT_IS_METADATA(BP_GET_TYPE(bp)) || lsize != BP_GET_LSIZE(bp))
+		return (0);
+
+	/*
+	 * The patch must be smaller than the WRITE it replaces (it leaves
+	 * room for the patch's own varints), and is written to a buffer of
+	 * lsize bytes.
+	 */
+	size_t cap = (size_t)srdp->datasz *
+	    MIN(zfs_send_delta_max_pct, 100) / 100;
+	cap = MIN(cap, lsize - 8);
+	if (cap == 0)
+		return (0);
+
+	boolean_t same = delta_same_exists(sd, range->object, offset,
+	    srdp->obj_type, lsize);
+	uint64_t sib = delta_sibling(dscp, range->object);
+	if (sib == range->object)
+		sib = 0;
+	if (!same && sib == 0 && avl_numnodes(&sd->sd_sketch) == 0)
+		return (0);
+	REFS_STAT_BUMP(send_delta_attempts);
+
+	/* The patch is computed on logical data. */
+	send_delta_bufs(sd, lsize);
+	if (srdp->io_compressed && BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF) {
+		abd_t *sabd = abd_get_from_buf(data, srdp->datasz);
+		abd_t *dabd = abd_get_from_buf(sd->sd_tgtbuf, lsize);
+		err = zio_decompress_data(BP_GET_COMPRESS(bp), sabd, dabd,
+		    srdp->datasz, lsize, NULL);
+		abd_free(sabd);
+		abd_free(dabd);
+		if (err != 0)
+			return (0);
+		tgt = sd->sd_tgtbuf;
+	}
+
+	if (same) {
+		err = send_delta_try_ref(dscp, range, tgt, cap, range->object,
+		    offset, lsize, DELTA_REF_SAME, sentp);
+		if (err != 0 || *sentp)
+			return (err);
+	}
+	if (sib != 0) {
+		err = send_delta_try_ref(dscp, range, tgt, cap, sib, offset,
+		    lsize, DELTA_REF_SIBLING, sentp);
+		if (err != 0 || *sentp)
+			return (err);
+	}
+
+	uint64_t sf[ZFS_DELTA_NSF];
+	if (avl_numnodes(&sd->sd_sketch) == 0 ||
+	    !zfs_delta_sketch(tgt, lsize, sf))
+		return (0);
+	for (int i = 0; i < ZFS_DELTA_NSF; i++) {
+		delta_sketch_entry_t search = { .dse_sf = sf[i] };
+		delta_sketch_entry_t *dse = avl_find(&sd->sd_sketch, &search,
+		    NULL);
+		if (dse == NULL)
+			continue;
+		/* Already tried as the same or sibling candidate. */
+		if (dse->dse_offset == offset &&
+		    ((same && dse->dse_object == range->object) ||
+		    dse->dse_object == sib))
+			return (0);
+		return (send_delta_try_ref(dscp, range, tgt, cap,
+		    dse->dse_object, dse->dse_offset, dse->dse_length,
+		    DELTA_REF_SKETCH, sentp));
+	}
+	return (0);
+}
+
 static void
 issue_data_read(struct send_reader_thread_arg *srta, struct send_range *range)
 {
@@ -2088,6 +2659,21 @@ issue_data_read(struct send_reader_thread_arg *srta, struct send_range *range)
 
 	if (send_refs_lookup(srta, range, split_large_blocks))
 		return;
+
+	/*
+	 * A --delta send first tries this block's own previous version as
+	 * the reference; start reading it now so that it is cached by the
+	 * time the block is sent.  Nothing is read if the fromsnap does not
+	 * have the object.
+	 */
+	if (srta->delta_ref_os != NULL && srta->issue_reads &&
+	    !split_large_blocks && range->start_blkid != DMU_SPILL_BLKID &&
+	    !BP_IS_EMBEDDED(bp) && !BP_IS_HOLE(bp) &&
+	    !DMU_OT_IS_METADATA(BP_GET_TYPE(bp))) {
+		dmu_prefetch(srta->delta_ref_os, range->object, 0,
+		    range->start_blkid * srdp->datablksz, srdp->datablksz,
+		    ZIO_PRIORITY_ASYNC_READ);
+	}
 
 	if (!srta->issue_reads)
 		return;
@@ -2396,6 +2982,7 @@ struct dmu_send_params {
 	boolean_t rawok;
 	boolean_t savedok;
 	boolean_t refsok;
+	boolean_t deltaok;
 	uint64_t resumeobj;
 	uint64_t resumeoff;
 	uint64_t saved_guid;
@@ -2618,9 +3205,10 @@ setup_merge_thread(struct send_merge_thread_arg *smt_arg,
 static void
 setup_reader_thread(struct send_reader_thread_arg *srt_arg,
     struct dmu_send_params *dspp, struct send_merge_thread_arg *smt_arg,
-    uint64_t featureflags, send_refs_t *refs)
+    uint64_t featureflags, send_refs_t *refs, objset_t *delta_ref_os)
 {
 	srt_arg->refs = refs;
+	srt_arg->delta_ref_os = delta_ref_os;
 	VERIFY0(bqueue_init(&srt_arg->q, zfs_send_queue_ff,
 	    MAX(zfs_send_queue_length, 2 * zfs_max_recordsize),
 	    offsetof(struct send_range, ln)));
@@ -2841,6 +3429,7 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	boolean_t book_resuming = resuming;
 	send_refs_t *refs = NULL;
 	dsl_dataset_t *refs_fromds = NULL;
+	objset_t *refs_from_os = NULL;
 
 	dsl_dataset_t *to_ds = dspp->to_ds;
 	zfs_bookmark_phys_t *ancestor_zb = &dspp->ancestor_zb;
@@ -2915,16 +3504,23 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	dsl_dataset_long_hold(to_ds, FTAG);
 
 	/*
-	 * Fromsnap references are only used for plain incrementals from an
-	 * existing snapshot: not raw, encrypted or redacted.  Otherwise the
-	 * request is ignored and a regular stream is sent.
+	 * Fromsnap references and deltas are only used for plain
+	 * incrementals from an existing snapshot: not raw, encrypted or
+	 * redacted.  Otherwise the request is ignored and a regular stream
+	 * is sent.
 	 */
-	if (dspp->refsok && fromtxg != 0 && !dspp->rawok &&
+	if ((dspp->refsok || dspp->deltaok) && fromtxg != 0 && !dspp->rawok &&
 	    !os->os_encrypted && dspp->redactbook == NULL &&
 	    ancestor_zb->zbm_redaction_obj == 0 &&
 	    dspp->numfromredactsnaps == NUM_SNAPS_NOT_REDACTED) {
 		refs_fromds = send_refs_fromsnap_hold(dp, to_ds, ancestor_zb,
 		    FTAG);
+		/* Open its objset now: that needs the pool config lock. */
+		if (refs_fromds != NULL &&
+		    dmu_objset_from_ds(refs_fromds, &refs_from_os) != 0) {
+			send_refs_fromsnap_rele(refs_fromds, FTAG);
+			refs_fromds = NULL;
+		}
 	}
 
 	from_arg = kmem_zalloc(sizeof (*from_arg), KM_SLEEP);
@@ -2953,27 +3549,39 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	/*
 	 * The stream is only marked as using fromsnap references if there
 	 * are any, so that it stays receivable by older software otherwise.
+	 * Without --refs the scan of the changed blocks only counts them for
+	 * --delta.  Deltas read the fromsnap while the stream is generated,
+	 * so it stays held until the end.
 	 */
 	if (refs_fromds != NULL) {
+		uint64_t new_blocks = 0, new_blocks_new_obj = 0;
 		char *name = kmem_alloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
 		send_setup_check_t ssc = { .ssc_dso = dspp->dso,
 		    .ssc_dssp = dssp, .ssc_name = name };
 
 		dsl_dataset_name(to_ds, name);
-		err = send_refs_build(to_ds, refs_fromds, fromtxg, &ssc, &refs);
+		err = send_refs_build(to_ds, refs_fromds, refs_from_os,
+		    fromtxg, dspp->refsok, dspp->deltaok, &new_blocks,
+		    &new_blocks_new_obj, &ssc, &refs);
+		if (err == 0 && dspp->deltaok)
+			err = send_delta_create(refs_fromds, refs_from_os,
+			    refs, new_blocks, new_blocks_new_obj, &ssc,
+			    &dsc.dsc_delta);
 		send_setup_phase(&ssc, ZFS_SEND_PHASE_STREAM, 0);
 		kmem_free(name, ZFS_MAX_DATASET_NAME_LEN);
-		send_refs_fromsnap_rele(refs_fromds, FTAG);
-		refs_fromds = NULL;
 		if (err != 0)
 			goto out;
-		if (refs != NULL) {
+		if (refs != NULL)
 			featureflags |= DMU_BACKUP_FEATURE_FROMSNAP_REFS;
-			dsc.dsc_featureflags = featureflags;
-			DMU_SET_FEATUREFLAGS(
-			    drr->drr_u.drr_begin.drr_versioninfo,
-			    featureflags);
+		if (dsc.dsc_delta != NULL) {
+			featureflags |= DMU_BACKUP_FEATURE_WRITE_DELTA;
+		} else {
+			send_refs_fromsnap_rele(refs_fromds, FTAG);
+			refs_fromds = NULL;
 		}
+		dsc.dsc_featureflags = featureflags;
+		DMU_SET_FEATUREFLAGS(drr->drr_u.drr_begin.drr_versioninfo,
+		    featureflags);
 	}
 
 	void *payload = NULL;
@@ -3067,7 +3675,7 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	setup_redact_list_thread(rlt_arg, dspp, redact_rl, dssp);
 	setup_merge_thread(smt_arg, dspp, from_arg, to_arg, rlt_arg, os);
 	setup_reader_thread(srt_arg, dspp, smt_arg, featureflags,
-	    refs);
+	    refs, dsc.dsc_delta != NULL ? dsc.dsc_delta->sd_ref_os : NULL);
 
 	range = bqueue_dequeue(&srt_arg->q);
 	while (err == 0 && !range->eos_marker) {
@@ -3143,6 +3751,10 @@ out:
 	kmem_free(rlt_arg, sizeof (*rlt_arg));
 	kmem_free(smt_arg, sizeof (*smt_arg));
 	kmem_free(srt_arg, sizeof (*srt_arg));
+	if (dsc.dsc_delta != NULL)
+		send_delta_destroy(dsc.dsc_delta);
+	if (refs_fromds != NULL)
+		send_refs_fromsnap_rele(refs_fromds, FTAG);
 	if (refs != NULL)
 		send_refs_destroy(refs);
 
@@ -3252,9 +3864,9 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 int
 dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     boolean_t large_block_ok, boolean_t compressok, boolean_t rawok,
-    boolean_t savedok, boolean_t refsok, uint64_t resumeobj,
-    uint64_t resumeoff, const char *redactbook, int outfd, offset_t *off,
-    dmu_send_outparams_t *dsop)
+    boolean_t savedok, boolean_t refsok, boolean_t deltaok,
+    uint64_t resumeobj, uint64_t resumeoff, const char *redactbook, int outfd,
+    offset_t *off, dmu_send_outparams_t *dsop)
 {
 	int err = 0;
 	ds_hold_flags_t dsflags;
@@ -3277,6 +3889,7 @@ dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
 	dspp.rawok = rawok;
 	dspp.savedok = savedok;
 	dspp.refsok = refsok;
+	dspp.deltaok = deltaok;
 
 	if (fromsnap != NULL && strpbrk(fromsnap, "@#") == NULL)
 		return (SET_ERROR(EINVAL));
@@ -3635,6 +4248,22 @@ ZFS_MODULE_PARAM(zfs_send, zfs_send_, unmodified_spill_blocks, INT, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, refs_max_blocks, U64, ZMOD_RW,
 	"Maximum number of blocks tracked as fromsnap references per send");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_max_pct, UINT, ZMOD_RW,
+	"Largest WRITE_DELTA patch, as a percentage of the WRITE it replaces");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sibling_scan, UINT, ZMOD_RW,
+	"Blocks of a file scanned to find the file it was copied from");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_max_blocks, U64, ZMOD_RW,
+	"Maximum fromsnap blocks in the WRITE_DELTA similarity index");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_min_pct, UINT, ZMOD_RW,
+	"Build the WRITE_DELTA similarity index only if this share of new "
+	"data blocks belongs to files not in the fromsnap");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_sketch_max_bytes, U64, ZMOD_RW,
+	"Maximum fromsnap data read to build the WRITE_DELTA similarity index");
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, no_prefetch_queue_length, UINT, ZMOD_RW,
 	"Maximum send queue length for non-prefetch queues");

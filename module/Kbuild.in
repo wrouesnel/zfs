@@ -422,6 +422,7 @@ ZFS_OBJS := \
 	zfs_debug_common.o \
 	zfs_crrd.o \
 	zfs_fm.o \
+	zfs_delta.o \
 	zfs_fuid.o \
 	zfs_impl.o \
 	zfs_ioctl.o \

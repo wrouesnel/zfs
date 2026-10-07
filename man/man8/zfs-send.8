@@ -43,6 +43,7 @@
 .Cm send
 .Op Fl DLPVbcehnpsvw
 .Op Fl -refs
+.Op Fl -delta
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -50,6 +51,7 @@
 .Cm send
 .Op Fl DLPVcensvw
 .Op Fl -refs
+.Op Fl -delta
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Nm zfs
@@ -79,6 +81,7 @@
 .Cm send
 .Op Fl DLPVbcehnpsvw
 .Op Fl -refs
+.Op Fl -delta
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -302,6 +305,13 @@ Send blocks that the incremental source snapshot already references as
 references to it, rather than as data.
 See
 .Sx Fromsnap References .
+.It Fl -delta
+Send blocks that are similar to a block of the incremental source as patches
+against it.
+May be combined with
+.Fl -refs .
+See
+.Sx Fromsnap References .
 .It Fl s , -skip-missing
 Allows sending a replication stream even when there are snapshots missing in the
 hierarchy.
@@ -329,6 +339,7 @@ You will be able to receive your streams on future versions of ZFS.
 .Cm send
 .Op Fl DLPVcenvw
 .Op Fl -refs
+.Op Fl -delta
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Xc
@@ -447,6 +458,13 @@ origin, etc.
 .It Fl -refs
 Send blocks that the incremental source snapshot already references as
 references to it, rather than as data.
+See
+.Sx Fromsnap References .
+.It Fl -delta
+Send blocks that are similar to a block of the incremental source as patches
+against it.
+May be combined with
+.Fl -refs .
 See
 .Sx Fromsnap References .
 .It Fl n , -dryrun
@@ -651,28 +669,76 @@ The size estimate of
 .Fl n
 does not account for references.
 .Pp
-References are only used for incremental sends from a snapshot.
+With
+.Fl -delta ,
+a changed block that is similar to a block of the source is sent as a patch
+against that block, which the receiver applies to its own copy and verifies.
+This helps when files are modified in place, and when copies of files are
+modified slightly, for example when a package is rebuilt with only embedded
+paths changed.
+Candidate blocks are the same block of the same file in the source, blocks
+with similar content and, together with
+.Fl -refs ,
+the corresponding block of the file that other blocks of the file were found
+to share data with.
+The latter are found through an index built from the source's data before the
+stream starts, which is bounded by
+.Sy zfs_send_delta_sketch_max_blocks
+and
+.Sy zfs_send_delta_sketch_max_bytes ,
+and is only built when enough of the new data is in files that the source
+does not have
+.Pq Sy zfs_send_delta_sketch_min_pct .
+A patch is only used if it is at most
+.Sy zfs_send_delta_max_pct
+percent of the size of the data it replaces.
+Patched blocks are written in full on the receiver, so they save bandwidth but
+not space.
+.Pp
+The two options are independent, and their costs and benefits differ:
+.Bl -bullet -compact
+.It
 .Fl -refs
+only reads block pointers and makes sending faster, but only helps if the
+source uses deduplication or block cloning and data is copied or rewritten
+unchanged.
+.It
+.Fl -delta
+reads the previous version of each changed block and costs CPU time to compute
+patches, so sending is slower; it helps when data is modified in place, as in
+databases, virtual machine images and volumes, with or without deduplication.
+.It
+Both together suit copies that are then modified, such as rebuilt software
+packages on a deduplicated dataset.
+.El
+.Pp
+References and patches are only used for incremental sends from a snapshot.
+.Fl -refs
+and
+.Fl -delta
 cannot be combined with raw
 .Pq Fl w
 or redacted sends, and is ignored when sending an encrypted dataset without
 .Fl w .
-A stream that contains references can only be received by software that
-supports them; when no references are found, a regular stream is generated.
+A stream that contains references or patches can only be received by software
+that supports them; with
+.Fl -refs ,
+when no references are found, a regular stream is generated.
 Resuming an interrupted receive with
 .Nm zfs Cm send Fl t
-keeps using references.
+keeps using references and patches.
 .Nm zstream Cm redup
 cannot convert such streams.
 .Pp
-References are found before anything is written.
+References are found, and the index is built, before anything is written.
 Meanwhile, the progress lines of
 .Fl v
-show how far that has got, in blocks scanned.
+show which of these is being done and how far it has got: blocks scanned for
+references, or bytes read for the index and the total it will read.
 With
 .Fl P ,
 these lines have three more fields: the phase
-.Pq Sy refs_scan No or Sy refs_resolve ,
+.Pq Sy refs_scan , refs_resolve , No or Sy delta_index ,
 its progress, and its expected total, or 0 if not known.
 The send stops promptly if it is interrupted or its output is closed
 meanwhile.

@@ -154,6 +154,11 @@ typedef enum drr_headertype {
  * resolves them against its own copy of the fromsnap.
  */
 #define	DMU_BACKUP_FEATURE_FROMSNAP_REFS	(1ULL << 31)
+/*
+ * WRITE_DELTA: the stream may contain DRR_WRITE_DELTA records, which
+ * rebuild a block by patching a block of the fromsnap.
+ */
+#define	DMU_BACKUP_FEATURE_WRITE_DELTA		(1ULL << 32)
 
 /*
  * Mask of all supported backup features
@@ -165,7 +170,8 @@ typedef enum drr_headertype {
     DMU_BACKUP_FEATURE_RAW | DMU_BACKUP_FEATURE_HOLDS | \
     DMU_BACKUP_FEATURE_REDACTED | DMU_BACKUP_FEATURE_SWITCH_TO_LARGE_BLOCKS | \
     DMU_BACKUP_FEATURE_ZSTD | DMU_BACKUP_FEATURE_LONGNAME | \
-    DMU_BACKUP_FEATURE_LARGE_MICROZAP | DMU_BACKUP_FEATURE_FROMSNAP_REFS)
+    DMU_BACKUP_FEATURE_LARGE_MICROZAP | DMU_BACKUP_FEATURE_FROMSNAP_REFS | \
+    DMU_BACKUP_FEATURE_WRITE_DELTA)
 
 /* Are all features in the given flag word currently supported? */
 #define	DMU_STREAM_SUPPORTED(x)	(!((x) & ~DMU_BACKUP_FEATURE_MASK))
@@ -254,7 +260,7 @@ typedef struct dmu_replay_record {
 		DRR_BEGIN, DRR_OBJECT, DRR_FREEOBJECTS,
 		DRR_WRITE, DRR_FREE, DRR_END, DRR_WRITE_BYREF,
 		DRR_SPILL, DRR_WRITE_EMBEDDED, DRR_OBJECT_RANGE, DRR_REDACT,
-		DRR_NUMTYPES
+		DRR_WRITE_DELTA, DRR_NUMTYPES
 	} drr_type;
 	uint32_t drr_payloadlen;
 	union {
@@ -338,6 +344,28 @@ typedef struct dmu_replay_record {
 			uint8_t drr_pad2[6];
 			ddt_key_t drr_key; /* deduplication key */
 		} drr_write_byref;
+		/*
+		 * With DMU_BACKUP_FEATURE_WRITE_DELTA: the block is rebuilt
+		 * by applying the payload, a patch in the format described
+		 * in sys/zfs_delta.h, to (drr_refobject, drr_refoffset,
+		 * drr_reflength) of the fromsnap.
+		 */
+		struct drr_write_delta {
+			uint64_t drr_object;
+			uint64_t drr_offset;
+			uint64_t drr_length;	/* logical size of the block */
+			uint64_t drr_toguid;
+			uint64_t drr_refguid;
+			uint64_t drr_refobject;
+			uint64_t drr_refoffset;
+			uint64_t drr_reflength;
+			/* payload is P2ROUNDUP(drr_patchlen, 8) bytes */
+			uint64_t drr_patchlen;
+			uint32_t drr_type;	/* dmu_object_type_t */
+			uint32_t drr_pad;
+			/* fletcher4 of the rebuilt block */
+			zio_cksum_t drr_cksum;
+		} drr_write_delta;
 		struct drr_spill {
 			uint64_t drr_object;
 			uint64_t drr_length;
