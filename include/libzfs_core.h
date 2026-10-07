@@ -78,6 +78,7 @@ enum lzc_send_flags {
 	LZC_SEND_FLAG_COMPRESS = 1 << 2,
 	LZC_SEND_FLAG_RAW = 1 << 3,
 	LZC_SEND_FLAG_SAVED = 1 << 4,
+	LZC_SEND_FLAG_REFS = 1 << 5,
 };
 
 _LIBZFS_CORE_H int lzc_send_wrapper(int (*)(int, void *), int, void *);
@@ -116,6 +117,8 @@ _LIBZFS_CORE_H int lzc_send_space_resume_redacted(const char *, const char *,
     enum lzc_send_flags, uint64_t, uint64_t, uint64_t, const char *,
     int, uint64_t *);
 _LIBZFS_CORE_H int lzc_send_progress(const char *, int, uint64_t *, uint64_t *);
+_LIBZFS_CORE_H int lzc_send_progress_phase(const char *, int, uint64_t *,
+    uint64_t *, zfs_send_phase_t *, uint64_t *, uint64_t *);
 
 _LIBZFS_CORE_H boolean_t lzc_exists(const char *);
 

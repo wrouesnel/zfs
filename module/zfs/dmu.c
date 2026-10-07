@@ -49,6 +49,7 @@
 #include <sys/trace_zfs.h>
 #include <sys/zfs_racct.h>
 #include <sys/zfs_rlock.h>
+#include <sys/dmu_send.h>
 #ifdef _KERNEL
 #include <sys/vmsystm.h>
 #include <sys/zfs_znode.h>
@@ -3131,6 +3132,7 @@ dmu_init(void)
 	l2arc_init();
 	arc_init();
 	dbuf_init();
+	dmu_send_init();
 
 	dmu_ksp = kstat_create("zfs", 0, "dmustats", "misc",
 	    KSTAT_TYPE_NAMED,
@@ -3146,6 +3148,7 @@ dmu_init(void)
 void
 dmu_fini(void)
 {
+	dmu_send_fini();
 	arc_fini(); /* arc depends on l2arc, so arc must go first */
 	l2arc_fini();
 	dmu_tx_fini();

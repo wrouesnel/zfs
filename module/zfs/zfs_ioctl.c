@@ -6367,6 +6367,14 @@ dump_bytes(objset_t *os, void *buf, int len, void *arg)
 }
 
 static int
+dump_bytes_check(void *arg)
+{
+	dump_bytes_arg_t *dba = (dump_bytes_arg_t *)arg;
+
+	return (zfs_file_peer_gone(dba->dba_fp));
+}
+
+static int
 dump_bytes_init(dump_bytes_arg_t *dba, int fd, dmu_send_outparams_t *out)
 {
 	zfs_file_t *fp = zfs_file_get(fd);
@@ -6381,6 +6389,7 @@ dump_bytes_init(dump_bytes_arg_t *dba, int fd, dmu_send_outparams_t *out)
 
 	memset(out, 0, sizeof (dmu_send_outparams_t));
 	out->dso_outfunc = dump_bytes;
+	out->dso_checkfunc = dump_bytes_check;
 	out->dso_arg = dba;
 	out->dso_dryrun = B_FALSE;
 
@@ -6544,6 +6553,10 @@ zfs_ioc_send_progress(zfs_cmd_t *zc)
 		    0, 0);
 		/* This is the closest thing we have to atomic_read_64. */
 		zc->zc_objset_type = atomic_cas_64(&dsp->dss_blocks, 0, 0);
+		/* What --refs/--delta preparation is doing, if anything. */
+		zc->zc_obj = atomic_cas_64(&dsp->dss_phase, 0, 0);
+		zc->zc_fromobj = atomic_cas_64(&dsp->dss_phase_done, 0, 0);
+		zc->zc_guid = atomic_cas_64(&dsp->dss_phase_total, 0, 0);
 	} else {
 		error = SET_ERROR(ENOENT);
 	}
@@ -7414,6 +7427,9 @@ zfs_ioc_space_snaps(const char *lastsnap, nvlist_t *innvl, nvlist_t *outnvl)
  *         presence indicates raw encrypted records should be used.
  *     (optional) "savedok" -> (value ignored)
  *         presence indicates we should send a partially received snapshot
+ *     (optional) "refsok" -> (value ignored)
+ *         presence indicates blocks already referenced by the incremental
+ *         source may be sent as DRR_WRITE_BYREF records
  *     (optional) "resume_object" and "resume_offset" -> (uint64)
  *         if present, resume send stream from specified object and offset.
  *     (optional) "redactbook" -> (string)
@@ -7431,6 +7447,7 @@ static const zfs_ioc_key_t zfs_keys_send_new[] = {
 	{"compressok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"rawok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"savedok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
+	{"refsok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"resume_object",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"resume_offset",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"redactbook",		DATA_TYPE_STRING,	ZK_OPTIONAL},
@@ -7449,6 +7466,7 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	boolean_t compressok;
 	boolean_t rawok;
 	boolean_t savedok;
+	boolean_t refsok;
 	uint64_t resumeobj = 0;
 	uint64_t resumeoff = 0;
 	const char *redactbook = NULL;
@@ -7462,6 +7480,7 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	compressok = nvlist_exists(innvl, "compressok");
 	rawok = nvlist_exists(innvl, "rawok");
 	savedok = nvlist_exists(innvl, "savedok");
+	refsok = nvlist_exists(innvl, "refsok");
 
 	(void) nvlist_lookup_uint64(innvl, "resume_object", &resumeobj);
 	(void) nvlist_lookup_uint64(innvl, "resume_offset", &resumeoff);
@@ -7476,7 +7495,7 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 
 	off = zfs_file_off(dba.dba_fp);
 	error = dmu_send(snapname, fromname, embedok, largeblockok,
-	    compressok, rawok, savedok, resumeobj, resumeoff,
+	    compressok, rawok, savedok, refsok, resumeobj, resumeoff,
 	    redactbook, fd, &off, &out);
 
 	dump_bytes_fini(&dba);
@@ -7513,6 +7532,9 @@ send_space_sum(objset_t *os, void *buf, int len, void *arg)
  *         if present, resume send stream from specified object and offset.
  *     (optional) "fd" -> file descriptor to use as a cookie for progress
  *         tracking (int32)
+ *     (optional) "refsok" -> (value ignored)
+ *         accepted for symmetry with zfs_ioc_send_new(); the estimate does
+ *         not account for fromsnap references, so it is an upper bound
  * }
  *
  * outnvl: {
@@ -7531,6 +7553,7 @@ static const zfs_ioc_key_t zfs_keys_send_space[] = {
 	{"resume_object",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"resume_offset",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"bytes",		DATA_TYPE_UINT64,	ZK_OPTIONAL},
+	{"refsok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 };
 
 static int
@@ -7645,7 +7668,7 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 		dsl_dataset_rele(tosnap, FTAG);
 		dsl_pool_rele(dp, FTAG);
 		error = dmu_send(snapname, fromname, embedok, largeblockok,
-		    compressok, rawok, savedok, resumeobj, resumeoff,
+		    compressok, rawok, savedok, B_FALSE, resumeobj, resumeoff,
 		    redactlist_book, fd, &off, &out);
 	} else {
 		error = dmu_send_estimate_fast(tosnap, fromsnap,

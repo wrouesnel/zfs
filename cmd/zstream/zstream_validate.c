@@ -33,6 +33,7 @@
 typedef struct {
 	int	nesting;
 	uint64_t featureflags;
+	uint64_t fromguid;
 	boolean_t begin_spill;
 	boolean_t compound;
 	boolean_t concluded;
@@ -108,6 +109,7 @@ chain_validate_records(void *item_in, void *context_in)
 		}
 		context->featureflags = DMU_GET_FEATUREFLAGS(
 		    drr->drr_u.drr_begin.drr_versioninfo);
+		context->fromguid = drr->drr_u.drr_begin.drr_fromguid;
 		context->begin_spill = !!(drr->drr_u.drr_begin.drr_flags &
 		    DRR_FLAG_SPILL_BLOCK);
 	} else if (drr->drr_type == DRR_END) {
@@ -145,6 +147,21 @@ chain_validate_records(void *item_in, void *context_in)
 	case DRR_WRITE:
 		err = recv_check_drr_write(drrw, NULL, is_raw,
 		    context->featureflags, errbuf, sizeof (errbuf));
+		validate_fail(err, errbuf);
+		break;
+
+	case DRR_WRITE_BYREF:
+		/*
+		 * Deduplicated streams (zfs send -D, no longer generated)
+		 * also carry these records; they refer to earlier records in
+		 * the same stream and are only for zstream redup.
+		 */
+		if (validate_stream_has_feature(context,
+		    DMU_BACKUP_FEATURE_DEDUP))
+			break;
+		err = recv_check_drr_write_byref(&drr->drr_u.drr_write_byref,
+		    NULL, context->featureflags, context->fromguid, errbuf,
+		    sizeof (errbuf));
 		validate_fail(err, errbuf);
 		break;
 
@@ -192,6 +209,7 @@ serial_validate_records(void)
 	validate_context_t *context = &contexts[context_ix];
 	context->nesting = 0;
 	context->featureflags = 0;
+	context->fromguid = 0;
 	context->begin_spill = B_FALSE;
 	context->compound = B_FALSE;
 	context->concluded = B_FALSE;

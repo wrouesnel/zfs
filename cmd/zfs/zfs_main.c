@@ -128,7 +128,8 @@ static int zfs_do_unzone(int argc, char **argv);
 static int zfs_do_help(int argc, char **argv);
 
 enum zfs_options {
-	ZFS_OPTION_JSON_NUMS_AS_INT = 1024
+	ZFS_OPTION_JSON_NUMS_AS_INT = 1024,
+	ZFS_OPTION_SEND_REFS
 };
 
 /*
@@ -337,10 +338,10 @@ get_usage(zfs_help_t idx)
 	case HELP_ROLLBACK:
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
-		return (gettext("\tsend [-DLPbcehnpsUVvw] "
+		return (gettext("\tsend [-DLPbcehnpsUVvw] [--refs] "
 		    "[-i|-I snapshot]\n"
 		    "\t     [-R [-X dataset[,dataset]...]]     <snapshot>\n"
-		    "\tsend [-DnVvPLecwU] [-i snapshot|bookmark] "
+		    "\tsend [-DnVvPLecwU] [--refs] [-i snapshot|bookmark] "
 		    "<filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
@@ -4800,6 +4801,7 @@ zfs_do_send(int argc, char **argv)
 		{"saved",	no_argument,		NULL, 'S'},
 		{"exclude",	required_argument,	NULL, 'X'},
 		{"no-preserve-encryption",	no_argument,	NULL, 'U'},
+		{"refs",	no_argument,	NULL, ZFS_OPTION_SEND_REFS},
 		{0, 0, 0, 0}
 	};
 
@@ -4893,6 +4895,9 @@ zfs_do_send(int argc, char **argv)
 		case 'U':
 			flags.no_preserve_encryption = B_TRUE;
 			break;
+		case ZFS_OPTION_SEND_REFS:
+			flags.refs = B_TRUE;
+			break;
 		case ':':
 			/*
 			 * If a parameter was not passed, optopt contains the
@@ -4981,7 +4986,8 @@ zfs_do_send(int argc, char **argv)
 		if (fromname != NULL || flags.replicate || flags.props ||
 		    flags.doall || flags.backup ||
 		    flags.holds || flags.largeblock || flags.embed_data ||
-		    flags.compress || flags.raw || redactbook != NULL) {
+		    flags.compress || flags.raw || flags.refs ||
+		    redactbook != NULL) {
 			free(excludes.list);
 
 			(void) fprintf(stderr, gettext("incompatible flags "
@@ -5003,6 +5009,23 @@ zfs_do_send(int argc, char **argv)
 		(void) fprintf(stderr,
 		    gettext("Error: raw sends may not be redacted.\n"));
 		return (1);
+	}
+
+	if (flags.refs) {
+		const char *why = NULL;
+
+		if (flags.raw)
+			why = gettext("raw sends (-w)");
+		else if (redactbook != NULL)
+			why = gettext("redacted sends (--redact)");
+		else if (fromname == NULL && resume_token == NULL)
+			why = gettext("full sends; use -i or -I");
+		if (why != NULL) {
+			free(excludes.list);
+			(void) fprintf(stderr, gettext("Error: --refs cannot "
+			    "be used with %s.\n"), why);
+			return (1);
+		}
 	}
 
 	if (!flags.dryrun && isatty(STDOUT_FILENO)) {

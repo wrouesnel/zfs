@@ -116,6 +116,15 @@ chain_redup_writes(void *item_in, void *context_in)
 	case DRR_BEGIN:
 	{
 		uint64_t flags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+		/*
+		 * Fromsnap references point outside the stream, so there is
+		 * nothing here to expand them from.
+		 */
+		if (flags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+			errx(EXIT_FAILURE, "stream references blocks in its "
+			    "incremental source (zfs send --refs) and cannot "
+			    "be converted");
+		}
 		flags &= ~(DMU_BACKUP_FEATURE_DEDUP |
 		    DMU_BACKUP_FEATURE_DEDUPPROPS);
 		DMU_SET_FEATUREFLAGS(drrb->drr_versioninfo, flags);

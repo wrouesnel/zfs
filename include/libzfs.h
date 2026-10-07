@@ -854,6 +854,9 @@ typedef struct sendflags {
 
 	/* allow sending datasets with props, without preserving encryption */
 	boolean_t no_preserve_encryption;
+
+	/* reference blocks already in the incremental source (--refs) */
+	boolean_t refs;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);

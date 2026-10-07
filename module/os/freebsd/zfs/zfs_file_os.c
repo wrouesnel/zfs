@@ -337,6 +337,19 @@ zfs_file_off(zfs_file_t *fp)
 	return (fp->f_offset);
 }
 
+/*
+ * Check whether the other end of a pipe or socket has gone away.
+ *
+ * Not supported: fo_poll() may selrecord() the calling thread, which is
+ * only valid during select(2) or poll(2).  Always returns 0.
+ */
+int
+zfs_file_peer_gone(zfs_file_t *fp)
+{
+	(void) fp;
+	return (0);
+}
+
 void *
 zfs_file_private(zfs_file_t *fp)
 {

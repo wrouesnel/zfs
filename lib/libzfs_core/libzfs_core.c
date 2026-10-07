@@ -898,6 +898,8 @@ lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "rawok");
 	if (flags & LZC_SEND_FLAG_SAVED)
 		fnvlist_add_boolean(args, "savedok");
+	if (flags & LZC_SEND_FLAG_REFS)
+		fnvlist_add_boolean(args, "refsok");
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -1077,6 +1079,33 @@ lzc_send_progress(const char *snapname, int fd, uint64_t *bytes_written,
 		*bytes_written = zc.zc_cookie;
 	if (blocks_visited != NULL)
 		*blocks_visited = zc.zc_objset_type;
+	return (0);
+}
+
+/*
+ * Like lzc_send_progress(), and also report which phase the send is in.
+ * While --refs prepares the stream, *phase is not ZFS_SEND_PHASE_STREAM,
+ * nothing has been written yet, and *phase_done and *phase_total (0 if
+ * unknown) report how far the phase has got, in blocks scanned.
+ */
+int
+lzc_send_progress_phase(const char *snapname, int fd, uint64_t *bytes_written,
+    uint64_t *blocks_visited, zfs_send_phase_t *phase, uint64_t *phase_done,
+    uint64_t *phase_total)
+{
+	zfs_cmd_t zc = {"\0"};
+
+	*bytes_written = *blocks_visited = *phase_done = *phase_total = 0;
+	*phase = ZFS_SEND_PHASE_STREAM;
+	(void) strlcpy(zc.zc_name, snapname, sizeof (zc.zc_name));
+	zc.zc_cookie = fd;
+	if (lzc_ioctl_fd(g_fd, ZFS_IOC_SEND_PROGRESS, &zc) != 0)
+		return (errno);
+	*bytes_written = zc.zc_cookie;
+	*blocks_visited = zc.zc_objset_type;
+	*phase = zc.zc_obj;
+	*phase_done = zc.zc_fromobj;
+	*phase_total = zc.zc_guid;
 	return (0);
 }
 

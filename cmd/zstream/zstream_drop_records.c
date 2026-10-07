@@ -48,6 +48,10 @@ chain_drop_records(void *item_in, void *context)
 		object = drrwe->drr_object;
 		offset = drrwe->drr_offset;
 		record_type = "WRITE_EMBEDDED";
+	} else if (drr->drr_type == DRR_WRITE_BYREF) {
+		object = drr->drr_u.drr_write_byref.drr_object;
+		offset = drr->drr_u.drr_write_byref.drr_offset;
+		record_type = "WRITE_BYREF";
 	} else {
 		return (D_OK);
 	}

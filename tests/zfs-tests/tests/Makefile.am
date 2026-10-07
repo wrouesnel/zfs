@@ -2243,6 +2243,16 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_realloc_dnode_size.ksh \
 	functional/rsend/send_realloc_encrypted_files.ksh \
 	functional/rsend/send_realloc_files.ksh \
+	functional/rsend/send_refs_clone.ksh \
+	functional/rsend/send_refs_copy_path.ksh \
+	functional/rsend/send_refs_dedup.ksh \
+	functional/rsend/send_refs_invalid.ksh \
+	functional/rsend/send_refs_max_blocks.ksh \
+	functional/rsend/send_refs_no_refs.ksh \
+	functional/rsend/send_refs_reimport.ksh \
+	functional/rsend/send_refs_replicate.ksh \
+	functional/rsend/send_refs_resume.ksh \
+	functional/rsend/send_refs_zstream.ksh \
 	functional/rsend/send_spill_block.ksh \
 	functional/rsend/send_split_large_block.ksh \
 	functional/rsend/send-wR_encrypted_zvol.ksh \

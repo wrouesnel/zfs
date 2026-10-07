@@ -16,6 +16,7 @@
  * Copyright (c) 2025, Klara, Inc.
  */
 
+#include <poll.h>
 #include <sys/zfs_context.h>
 #include <sys/zfs_file.h>
 #include <libzpool.h>
@@ -365,6 +366,24 @@ loff_t
 zfs_file_off(zfs_file_t *fp)
 {
 	return (lseek(fp->f_fd, SEEK_CUR, 0));
+}
+
+/*
+ * Check whether the other end of a pipe or socket has gone away, so that a
+ * writer with nothing to write yet can stop early.
+ *
+ * fp - pointer to file (pipe, socket, etc) to check
+ *
+ * Returns EPIPE if it has, and 0 if not or if this cannot be told.
+ */
+int
+zfs_file_peer_gone(zfs_file_t *fp)
+{
+	struct pollfd pfd = { .fd = fp->f_fd, .events = 0 };
+
+	if (poll(&pfd, 1, 0) == 1 && (pfd.revents & (POLLERR | POLLHUP)))
+		return (EPIPE);
+	return (0);
 }
 
 /*
