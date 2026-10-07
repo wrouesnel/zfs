@@ -79,6 +79,7 @@ typedef struct send_refs_stats {
 	kstat_named_t	send_delta_sketch_ns;
 	kstat_named_t	send_delta_sketch_skipped;
 	kstat_named_t	send_delta_index_loaded;
+	kstat_named_t	send_delta_prefetches;
 	kstat_named_t	recv_delta_records;
 } send_refs_stats_t;
 

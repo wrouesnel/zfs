@@ -22,8 +22,12 @@
 #    snapshot @b.
 # 2. Build the index of @a.  Send -i @a @b --delta with and without it:
 #    the streams are identical and the index was loaded.  Receive it.
+#    Blocks of the new file have no same-object candidate, so their
+#    sketch candidates were prefetched.
 # 3. An index of @b, a truncated index and one with a bad entry are
 #    refused, as is --delta-index without --delta or with -I.
+# 4. When an index would not be built (only data modified in place), a
+#    prebuilt one is not loaded either.
 
 verify_runnable "both"
 
@@ -61,9 +65,11 @@ log_must test $(stat_size $idx) -gt 64
 
 log_must eval "zfs send --delta -i @a $sendfs@b >$BACKDIR/built"
 typeset -i loaded=$(send_refs_stat send_delta_index_loaded)
+typeset -i prefetches=$(send_refs_stat send_delta_prefetches)
 log_must eval "zfs send --delta --delta-index $idx -i @a $sendfs@b \
     >$BACKDIR/loaded"
 log_must test $(send_refs_stat send_delta_index_loaded) -eq $((loaded + 1))
+log_must test $(send_refs_stat send_delta_prefetches) -ge $((prefetches + 2))
 log_must cmp $BACKDIR/built $BACKDIR/loaded
 log_must test "$(stream_delta_records $BACKDIR/loaded)" -eq 2
 log_must eval "zfs recv -u $recvfs <$BACKDIR/loaded"
@@ -87,5 +93,16 @@ log_mustnot eval "zfs send --delta --delta-index $idx.bad -i @a $sendfs@b \
 log_mustnot eval "zfs send --delta-index $idx -i @a $sendfs@b >/dev/null"
 log_mustnot eval "zfs send --delta --delta-index $idx -I @a $sendfs@b \
     >/dev/null"
+
+# Only data modified in place: neither built nor loaded.
+refs_poke $mntpnt/f1 5 1000 8
+log_must zfs snapshot $sendfs@c
+log_must eval "zfs send --build-delta-index $sendfs@b >$idx.b"
+loaded=$(send_refs_stat send_delta_index_loaded)
+typeset -i skipped=$(send_refs_stat send_delta_sketch_skipped)
+log_must eval "zfs send --delta --delta-index $idx.b -i @b $sendfs@c \
+    >/dev/null"
+log_must test $(send_refs_stat send_delta_index_loaded) -eq $loaded
+log_must test $(send_refs_stat send_delta_sketch_skipped) -eq $((skipped + 1))
 
 log_pass "zfs send --delta-index uses a similarity index built ahead of time"

@@ -144,6 +144,7 @@ static send_refs_stats_t send_refs_stats = {
 	{ "send_delta_sketch_ns",	KSTAT_DATA_UINT64 },
 	{ "send_delta_sketch_skipped",	KSTAT_DATA_UINT64 },
 	{ "send_delta_index_loaded",	KSTAT_DATA_UINT64 },
+	{ "send_delta_prefetches",	KSTAT_DATA_UINT64 },
 	{ "recv_delta_records",		KSTAT_DATA_UINT64 },
 };
 static kstat_t *send_refs_ksp;
@@ -256,6 +257,9 @@ struct send_range {
 			boolean_t		byref;
 			uint64_t		ref_object;
 			uint64_t		ref_offset;
+			/* --delta sketch, if computed ahead (SEND_SF_*) */
+			uint8_t			sf_state;
+			uint64_t		sf[ZFS_DELTA_NSF];
 		} data;
 		struct srh {
 			uint32_t		datablksz;
@@ -1214,6 +1218,11 @@ do_dump(dmu_send_cookie_t *dscp, struct send_range *range)
 	return (err);
 }
 
+/* srd.sf_state: whether the block's --delta sketch was computed ahead */
+#define	SEND_SF_UNKNOWN	0	/* not computed */
+#define	SEND_SF_OK	1	/* in srd.sf */
+#define	SEND_SF_NONE	2	/* the block has no usable sketch */
+
 static struct send_range *
 range_alloc(enum type type, uint64_t object, uint64_t start_blkid,
     uint64_t end_blkid, boolean_t eos)
@@ -1233,6 +1242,7 @@ range_alloc(enum type type, uint64_t object, uint64_t start_blkid,
 		range->sru.data.io_err = 0;
 		range->sru.data.io_compressed = B_FALSE;
 		range->sru.data.byref = B_FALSE;
+		range->sru.data.sf_state = SEND_SF_UNKNOWN;
 	} else if (type == OBJECT) {
 		range->sru.object.spill_range = NULL;
 	}
@@ -2201,6 +2211,10 @@ typedef struct send_delta {
 	objset_t	*sd_ref_os;	/* the fromsnap */
 	send_refs_t	*sd_refs;	/* may be NULL */
 	send_setup_check_t *sd_check;
+	boolean_t	sd_loaded;	/* sd_sketch is a prebuilt index */
+	/* scratch for send_delta_prepare(), sd_prepsize bytes */
+	uint64_t	sd_prepsize;
+	uint8_t		*sd_prepbuf;
 	avl_tree_t	sd_sketch;
 	uint64_t	sd_sketch_blocks;
 	uint64_t	sd_sketch_bytes;
@@ -2300,6 +2314,8 @@ send_delta_destroy(send_delta_t *sd)
 		vmem_free(sd->sd_tgtbuf, sd->sd_bufsize);
 		vmem_free(sd->sd_patchbuf, sd->sd_bufsize);
 	}
+	if (sd->sd_prepsize != 0)
+		vmem_free(sd->sd_prepbuf, sd->sd_prepsize);
 	kmem_free(sd, sizeof (*sd));
 }
 
@@ -2435,6 +2451,7 @@ send_delta_index_load(send_delta_t *sd, uint64_t guid, int fd)
 	if (err == 0) {
 		sd->sd_sketch_blocks = dih.dih_blocks;
 		sd->sd_sketch_bytes = dih.dih_bytes;
+		sd->sd_loaded = B_TRUE;
 		REFS_STAT_BUMP(send_delta_index_loaded);
 	}
 	return (err);
@@ -2446,19 +2463,6 @@ send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
     send_setup_check_t *ssc, send_delta_t **sdp)
 {
 	send_delta_t *sd = send_delta_alloc(ref_os, refs, ssc);
-
-	/* A prebuilt index replaces reading the fromsnap. */
-	if (indexfd >= 0) {
-		int err = send_delta_index_load(sd,
-		    dsl_dataset_phys(fromds)->ds_guid, indexfd);
-		if (err != 0) {
-			send_delta_destroy(sd);
-			*sdp = NULL;
-			return (err);
-		}
-		*sdp = sd;
-		return (0);
-	}
 
 	/*
 	 * When nearly all new data is in files the fromsnap already has (a
@@ -2472,6 +2476,23 @@ send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
 	    new_blocks * MIN(zfs_send_delta_sketch_min_pct, 100))) {
 		REFS_STAT_BUMP(send_delta_sketch_skipped);
 		sketch = B_FALSE;
+	}
+	/*
+	 * A prebuilt index replaces reading the fromsnap.  It is only used
+	 * when an index would have been built: where it would not help, even
+	 * loading it and computing the changed blocks' sketches costs more
+	 * than it saves.
+	 */
+	if (sketch && indexfd >= 0) {
+		int err = send_delta_index_load(sd,
+		    dsl_dataset_phys(fromds)->ds_guid, indexfd);
+		if (err != 0) {
+			send_delta_destroy(sd);
+			*sdp = NULL;
+			return (err);
+		}
+		*sdp = sd;
+		return (0);
 	}
 	if (sketch) {
 		hrtime_t start = gethrtime();
@@ -2858,9 +2879,11 @@ send_delta_try(dmu_send_cookie_t *dscp, struct send_range *range, char *data,
 			return (err);
 	}
 
-	uint64_t sf[ZFS_DELTA_NSF];
+	uint64_t *sf = srdp->sf;
 	if (avl_numnodes(&sd->sd_sketch) == 0 ||
-	    !zfs_delta_sketch(tgt, lsize, sf))
+	    srdp->sf_state == SEND_SF_NONE)
+		return (0);
+	if (srdp->sf_state != SEND_SF_OK && !zfs_delta_sketch(tgt, lsize, sf))
 		return (0);
 	for (int i = 0; i < ZFS_DELTA_NSF; i++) {
 		delta_sketch_entry_t search = { .dse_sf = sf[i] };
@@ -2878,6 +2901,145 @@ send_delta_try(dmu_send_cookie_t *dscp, struct send_range *range, char *data,
 		    DELTA_REF_SKETCH, sentp));
 	}
 	return (0);
+}
+
+/*
+ * With a prebuilt similarity index, nothing has read the fromsnap, so the
+ * reference block of a sketch candidate would only be read from disk when
+ * its changed block is sent, one random read at a time.  The main thread
+ * therefore looks up to SEND_DELTA_WINDOW blocks (and
+ * SEND_DELTA_WINDOW_BYTES of their data) ahead: for each block that has
+ * no same-object candidate (which the reader thread prefetches), it
+ * computes the sketch once, keeps it with the block, and starts reading
+ * the candidate.
+ */
+#define	SEND_DELTA_WINDOW	32
+#define	SEND_DELTA_WINDOW_BYTES	(16ULL << 20)
+
+static void
+send_delta_prepare(dmu_send_cookie_t *dscp, struct send_range *range)
+{
+	send_delta_t *sd = dscp->dsc_delta;
+	struct srd *srdp = &range->sru.data;
+	const blkptr_t *bp = &srdp->bp;
+	uint64_t lsize = srdp->datablksz;
+	const uint8_t *tgt;
+	int err;
+
+	if (range->eos_marker || range->type != DATA || srdp->byref ||
+	    range->start_blkid == DMU_SPILL_BLKID || BP_IS_EMBEDDED(bp) ||
+	    BP_IS_HOLE(bp) || BP_IS_PROTECTED(bp) || BP_SHOULD_BYTESWAP(bp) ||
+	    DMU_OT_IS_METADATA(BP_GET_TYPE(bp)) || lsize != BP_GET_LSIZE(bp) ||
+	    (lsize > SPA_OLD_MAXBLOCKSIZE && !(dscp->dsc_featureflags &
+	    DMU_BACKUP_FEATURE_LARGE_BLOCKS)))
+		return;
+	if (delta_same_exists(sd, range->object,
+	    range->start_blkid * lsize, srdp->obj_type, lsize))
+		return;
+
+	mutex_enter(&srdp->lock);
+	while (srdp->io_outstanding)
+		cv_wait(&srdp->cv, &srdp->lock);
+	err = srdp->io_err;
+	mutex_exit(&srdp->lock);
+	if (err != 0)
+		return;
+	if (srdp->abd != NULL)
+		tgt = abd_to_buf(srdp->abd);
+	else if (srdp->abuf != NULL)
+		tgt = srdp->abuf->b_data;
+	else
+		return;
+
+	if (srdp->io_compressed && BP_GET_COMPRESS(bp) != ZIO_COMPRESS_OFF) {
+		if (sd->sd_prepsize < lsize) {
+			if (sd->sd_prepsize != 0)
+				vmem_free(sd->sd_prepbuf, sd->sd_prepsize);
+			sd->sd_prepbuf = vmem_alloc(lsize, KM_SLEEP);
+			sd->sd_prepsize = lsize;
+		}
+		abd_t *sabd = abd_get_from_buf((void *)tgt, srdp->datasz);
+		abd_t *dabd = abd_get_from_buf(sd->sd_prepbuf, lsize);
+		err = zio_decompress_data(BP_GET_COMPRESS(bp), sabd, dabd,
+		    srdp->datasz, lsize, NULL);
+		abd_free(sabd);
+		abd_free(dabd);
+		if (err != 0)
+			return;
+		tgt = sd->sd_prepbuf;
+	}
+
+	if (!zfs_delta_sketch(tgt, lsize, srdp->sf)) {
+		srdp->sf_state = SEND_SF_NONE;
+		return;
+	}
+	srdp->sf_state = SEND_SF_OK;
+	for (int i = 0; i < ZFS_DELTA_NSF; i++) {
+		delta_sketch_entry_t search = { .dse_sf = srdp->sf[i] };
+		delta_sketch_entry_t *dse = avl_find(&sd->sd_sketch, &search,
+		    NULL);
+		if (dse != NULL) {
+			dmu_prefetch(sd->sd_ref_os, dse->dse_object, 0,
+			    dse->dse_offset, dse->dse_length,
+			    ZIO_PRIORITY_ASYNC_READ);
+			REFS_STAT_BUMP(send_delta_prefetches);
+			break;
+		}
+	}
+}
+
+static uint64_t
+send_delta_range_bytes(const struct send_range *range)
+{
+	return (range->type == DATA && !range->eos_marker ?
+	    range->sru.data.datasz : 0);
+}
+
+/*
+ * The main loop of dmu_send_impl() with SEND_DELTA_WINDOW blocks of
+ * lookahead (see send_delta_prepare()).  *rangep is the first range on
+ * entry and the last one dequeued on return, which the caller frees (and
+ * on error drains the queue from).
+ */
+static int
+send_delta_window(dmu_send_cookie_t *dscp, bqueue_t *q,
+    struct send_range **rangep)
+{
+	struct send_range *win[SEND_DELTA_WINDOW];
+	struct send_range *last = *rangep;
+	int head = 0, n = 1, err = 0;
+	uint64_t bytes;
+
+	win[0] = last;
+	send_delta_prepare(dscp, last);
+	bytes = send_delta_range_bytes(last);
+	while (err == 0) {
+		while (n < SEND_DELTA_WINDOW &&
+		    bytes < SEND_DELTA_WINDOW_BYTES && !last->eos_marker) {
+			last = get_next_range_nofree(q, last);
+			send_delta_prepare(dscp, last);
+			bytes += send_delta_range_bytes(last);
+			win[(head + n) % SEND_DELTA_WINDOW] = last;
+			n++;
+		}
+		struct send_range *range = win[head];
+		if (range->eos_marker)
+			break;
+		err = do_dump(dscp, range);
+		bytes -= send_delta_range_bytes(range);
+		range_free(range);
+		head = (head + 1) % SEND_DELTA_WINDOW;
+		n--;
+		if (err == 0 && issig())
+			err = SET_ERROR(EINTR);
+	}
+	/* Free all but the last range, which the caller still holds. */
+	for (; n > 1; n--) {
+		range_free(win[head]);
+		head = (head + 1) % SEND_DELTA_WINDOW;
+	}
+	*rangep = last;
+	return (err);
 }
 
 static void
@@ -3994,11 +4156,15 @@ dmu_send_impl(struct dmu_send_params *dspp)
 	    refs, dsc.dsc_delta != NULL ? dsc.dsc_delta->sd_ref_os : NULL);
 
 	range = bqueue_dequeue(&srt_arg->q);
-	while (err == 0 && !range->eos_marker) {
-		err = do_dump(&dsc, range);
-		range = get_next_range(&srt_arg->q, range);
-		if (issig())
-			err = SET_ERROR(EINTR);
+	if (dsc.dsc_delta != NULL && dsc.dsc_delta->sd_loaded) {
+		err = send_delta_window(&dsc, &srt_arg->q, &range);
+	} else {
+		while (err == 0 && !range->eos_marker) {
+			err = do_dump(&dsc, range);
+			range = get_next_range(&srt_arg->q, range);
+			if (issig())
+				err = SET_ERROR(EINTR);
+		}
 	}
 
 	/*
