@@ -860,6 +860,9 @@ typedef struct sendflags {
 
 	/* patch blocks similar to ones in the incremental source (--delta) */
 	boolean_t delta;
+
+	/* prebuilt similarity index of the incremental source, or NULL */
+	const char *delta_index;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);

@@ -752,6 +752,7 @@ typedef struct send_dump_data {
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
 	boolean_t large_block, compress, raw, holds, refs, delta;
 	boolean_t progressastitle;
+	const char *delta_index;
 	int outfd;
 	boolean_t err;
 	nvlist_t *fss;
@@ -823,7 +824,7 @@ zfs_send_space(zfs_handle_t *zhp, const char *snapname, const char *from,
 static int
 dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
     boolean_t fromorigin, int outfd, enum lzc_send_flags flags,
-    nvlist_t *debugnv)
+    const char *delta_index, nvlist_t *debugnv)
 {
 	zfs_cmd_t zc = {"\0"};
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
@@ -857,7 +858,20 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 		(void) strlcpy(fromname, zhp->zfs_name, sizeof (fromname));
 		*(strchr(fromname, '@') + 1) = '\0';
 		(void) strlcat(fromname, fromsnap, sizeof (fromname));
-		error = lzc_send(zhp->zfs_name, fromname, outfd, flags);
+		if (delta_index != NULL && (flags & LZC_SEND_FLAG_DELTA)) {
+			int indexfd = open(delta_index, O_RDONLY | O_CLOEXEC);
+
+			if (indexfd < 0) {
+				error = errno;
+			} else {
+				error = lzc_send_delta_indexed(zhp->zfs_name,
+				    fromname, outfd, flags, indexfd);
+				(void) close(indexfd);
+			}
+		} else {
+			error = lzc_send(zhp->zfs_name, fromname, outfd,
+			    flags);
+		}
 	} else if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
 		error = errno;
 	}
@@ -1362,7 +1376,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		}
 
 		err = dump_ioctl(zhp, sdd->prevsnap, sdd->prevsnap_obj,
-		    fromorigin, sdd->outfd, flags, sdd->debugnv);
+		    fromorigin, sdd->outfd, flags, sdd->delta_index,
+		    sdd->debugnv);
 
 		if (send_progress_thread_exit(zhp->zfs_hdl, tid, &oldmask))
 			return (-1);
@@ -2510,6 +2525,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.large_block = flags->largeblock;
 	sdd.refs = flags->refs;
 	sdd.delta = flags->delta;
+	sdd.delta_index = flags->delta_index;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
 	sdd.raw = flags->raw;
@@ -2876,8 +2892,21 @@ zfs_send_one_cb_impl(zfs_handle_t *zhp, const char *from, int fd,
 		SEND_PROGRESS_THREAD_PARENT_BLOCK(&oldmask);
 	}
 
-	err = lzc_send_redacted(name, from, fd,
-	    lzc_flags_from_sendflags(flags), redactbook);
+	if (flags->delta_index != NULL && flags->delta && redactbook == NULL) {
+		/* --delta with a prebuilt similarity index of "from" */
+		int indexfd = open(flags->delta_index, O_RDONLY | O_CLOEXEC);
+
+		if (indexfd < 0) {
+			err = errno;
+		} else {
+			err = lzc_send_delta_indexed(name, from, fd,
+			    lzc_flags_from_sendflags(flags), indexfd);
+			(void) close(indexfd);
+		}
+	} else {
+		err = lzc_send_redacted(name, from, fd,
+		    lzc_flags_from_sendflags(flags), redactbook);
+	}
 
 	if (send_progress_thread_exit(hdl, ptid, &oldmask))
 			return (-1);

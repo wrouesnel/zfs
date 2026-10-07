@@ -7433,6 +7433,12 @@ zfs_ioc_space_snaps(const char *lastsnap, nvlist_t *innvl, nvlist_t *outnvl)
  *     (optional) "deltaok" -> (value ignored)
  *         presence indicates blocks similar to blocks of the incremental
  *         source may be sent as DRR_WRITE_DELTA records
+ *     (optional) "deltaindexfd" -> (int32)
+ *         with "deltaok", read the incremental source's similarity index
+ *         from this file descriptor instead of building it
+ *     (optional) "deltaindexbuild" -> (value ignored)
+ *         write the similarity index of the snapshot to "fd" instead of a
+ *         send stream; other options are ignored
  *     (optional) "resume_object" and "resume_offset" -> (uint64)
  *         if present, resume send stream from specified object and offset.
  *     (optional) "redactbook" -> (string)
@@ -7452,6 +7458,8 @@ static const zfs_ioc_key_t zfs_keys_send_new[] = {
 	{"savedok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"refsok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"deltaok",		DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
+	{"deltaindexfd",	DATA_TYPE_INT32,	ZK_OPTIONAL},
+	{"deltaindexbuild",	DATA_TYPE_BOOLEAN,	ZK_OPTIONAL},
 	{"resume_object",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"resume_offset",	DATA_TYPE_UINT64,	ZK_OPTIONAL},
 	{"redactbook",		DATA_TYPE_STRING,	ZK_OPTIONAL},
@@ -7472,6 +7480,7 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	boolean_t savedok;
 	boolean_t refsok;
 	boolean_t deltaok;
+	int32_t deltaindexfd = -1;
 	uint64_t resumeobj = 0;
 	uint64_t resumeoff = 0;
 	const char *redactbook = NULL;
@@ -7487,6 +7496,9 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 	savedok = nvlist_exists(innvl, "savedok");
 	refsok = nvlist_exists(innvl, "refsok");
 	deltaok = nvlist_exists(innvl, "deltaok");
+	(void) nvlist_lookup_int32(innvl, "deltaindexfd", &deltaindexfd);
+	if (deltaindexfd >= 0 && !deltaok)
+		return (SET_ERROR(EINVAL));
 
 	(void) nvlist_lookup_uint64(innvl, "resume_object", &resumeobj);
 	(void) nvlist_lookup_uint64(innvl, "resume_offset", &resumeoff);
@@ -7500,9 +7512,14 @@ zfs_ioc_send_new(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 		return (error);
 
 	off = zfs_file_off(dba.dba_fp);
-	error = dmu_send(snapname, fromname, embedok, largeblockok,
-	    compressok, rawok, savedok, refsok, deltaok, resumeobj, resumeoff,
-	    redactbook, fd, &off, &out);
+	if (nvlist_exists(innvl, "deltaindexbuild")) {
+		/* Write snapname's similarity index instead of a stream. */
+		error = dmu_send_delta_index(snapname, &out);
+	} else {
+		error = dmu_send(snapname, fromname, embedok, largeblockok,
+		    compressok, rawok, savedok, refsok, deltaok, deltaindexfd,
+		    resumeobj, resumeoff, redactbook, fd, &off, &out);
+	}
 
 	dump_bytes_fini(&dba);
 
@@ -7675,8 +7692,8 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 		dsl_dataset_rele(tosnap, FTAG);
 		dsl_pool_rele(dp, FTAG);
 		error = dmu_send(snapname, fromname, embedok, largeblockok,
-		    compressok, rawok, savedok, B_FALSE, B_FALSE, resumeobj,
-		    resumeoff, redactlist_book, fd, &off, &out);
+		    compressok, rawok, savedok, B_FALSE, B_FALSE, -1,
+		    resumeobj, resumeoff, redactlist_book, fd, &off, &out);
 	} else {
 		error = dmu_send_estimate_fast(tosnap, fromsnap,
 		    (from && strchr(fromname, '#') != NULL ? &zbm : NULL),

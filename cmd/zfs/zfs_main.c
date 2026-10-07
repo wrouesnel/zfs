@@ -130,7 +130,9 @@ static int zfs_do_help(int argc, char **argv);
 enum zfs_options {
 	ZFS_OPTION_JSON_NUMS_AS_INT = 1024,
 	ZFS_OPTION_SEND_REFS,
-	ZFS_OPTION_SEND_DELTA
+	ZFS_OPTION_SEND_DELTA,
+	ZFS_OPTION_SEND_DELTA_INDEX,
+	ZFS_OPTION_SEND_BUILD_DELTA_INDEX
 };
 
 /*
@@ -348,7 +350,10 @@ get_usage(zfs_help_t idx)
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
 		    "\tsend [-nVvPe] -t <receive_resume_token>\n"
-		    "\tsend [-PnVv] --saved filesystem\n"));
+		    "\tsend [-PnVv] --saved filesystem\n"
+		    "\tsend --delta [--delta-index file] -i snapshot "
+		    "<snapshot>\n"
+		    "\tsend --build-delta-index <snapshot>\n"));
 	case HELP_SET:
 		return (gettext("\tset [-u] <property=value> ... "
 		    "<filesystem|volume|snapshot> ...\n"));
@@ -4782,6 +4787,7 @@ zfs_do_send(int argc, char **argv)
 	nvlist_t *dbgnv = NULL;
 	char *redactbook = NULL;
 	zfs_send_exclude_arg_t excludes = { 0 };
+	boolean_t build_delta_index = B_FALSE;
 
 	struct option long_options[] = {
 		{"replicate",	no_argument,		NULL, 'R'},
@@ -4805,6 +4811,10 @@ zfs_do_send(int argc, char **argv)
 		{"no-preserve-encryption",	no_argument,	NULL, 'U'},
 		{"refs",	no_argument,	NULL, ZFS_OPTION_SEND_REFS},
 		{"delta",	no_argument,	NULL, ZFS_OPTION_SEND_DELTA},
+		{"delta-index",	required_argument, NULL,
+		    ZFS_OPTION_SEND_DELTA_INDEX},
+		{"build-delta-index", no_argument, NULL,
+		    ZFS_OPTION_SEND_BUILD_DELTA_INDEX},
 		{0, 0, 0, 0}
 	};
 
@@ -4904,6 +4914,12 @@ zfs_do_send(int argc, char **argv)
 		case ZFS_OPTION_SEND_DELTA:
 			flags.delta = B_TRUE;
 			break;
+		case ZFS_OPTION_SEND_DELTA_INDEX:
+			flags.delta_index = optarg;
+			break;
+		case ZFS_OPTION_SEND_BUILD_DELTA_INDEX:
+			build_delta_index = B_TRUE;
+			break;
 		case ':':
 			/*
 			 * If a parameter was not passed, optopt contains the
@@ -4986,6 +5002,41 @@ zfs_do_send(int argc, char **argv)
 			(void) fprintf(stderr, gettext("too many arguments\n"));
 			usage(B_FALSE);
 		}
+	}
+
+	/*
+	 * Write a snapshot's --delta similarity index, for later sends from
+	 * it with --delta-index, instead of a stream.
+	 */
+	if (build_delta_index) {
+		free(excludes.list);
+		if (argc != 1 || strchr(argv[0], '@') == NULL) {
+			(void) fprintf(stderr, gettext("--build-delta-index "
+			    "takes a single snapshot\n"));
+			usage(B_FALSE);
+		}
+		if (isatty(STDOUT_FILENO)) {
+			(void) fprintf(stderr, gettext("Error: Index can not "
+			    "be written to a terminal.\n"
+			    "You must redirect standard output.\n"));
+			return (1);
+		}
+		err = lzc_send_delta_index(argv[0], STDOUT_FILENO);
+		if (err != 0) {
+			(void) fprintf(stderr, gettext("cannot build delta "
+			    "index of '%s': %s\n"), argv[0], strerror(err));
+			return (1);
+		}
+		return (0);
+	}
+
+	if (flags.delta_index != NULL && (!flags.delta || fromname == NULL ||
+	    flags.doall || flags.replicate || resume_token != NULL)) {
+		free(excludes.list);
+		(void) fprintf(stderr, gettext("Error: --delta-index needs "
+		    "--delta and a single incremental (-i), from the "
+		    "snapshot it was built for.\n"));
+		return (1);
 	}
 
 	if (flags.saved) {

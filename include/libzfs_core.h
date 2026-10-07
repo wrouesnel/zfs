@@ -94,6 +94,9 @@ _LIBZFS_CORE_H int lzc_send_redacted(const char *, const char *, int,
     enum lzc_send_flags, const char *);
 _LIBZFS_CORE_H int lzc_send_resume_redacted(const char *, const char *, int,
     enum lzc_send_flags, uint64_t, uint64_t, const char *);
+_LIBZFS_CORE_H int lzc_send_delta_indexed(const char *, const char *, int,
+    enum lzc_send_flags, int);
+_LIBZFS_CORE_H int lzc_send_delta_index(const char *, int);
 _LIBZFS_CORE_H int lzc_receive(const char *, nvlist_t *, const char *,
     boolean_t, boolean_t, int);
 _LIBZFS_CORE_H int lzc_receive_resumable(const char *, nvlist_t *, const char *,

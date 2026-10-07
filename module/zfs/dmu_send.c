@@ -143,6 +143,7 @@ static send_refs_stats_t send_refs_stats = {
 	{ "send_delta_sketch_truncated", KSTAT_DATA_UINT64 },
 	{ "send_delta_sketch_ns",	KSTAT_DATA_UINT64 },
 	{ "send_delta_sketch_skipped",	KSTAT_DATA_UINT64 },
+	{ "send_delta_index_loaded",	KSTAT_DATA_UINT64 },
 	{ "recv_delta_records",		KSTAT_DATA_UINT64 },
 };
 static kstat_t *send_refs_ksp;
@@ -2307,14 +2308,11 @@ send_delta_destroy(send_delta_t *sd)
  * duration of the send.  Returns the error from send_setup_check() if the
  * send must stop while building the similarity index, and 0 otherwise.
  */
-static int
-send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
-    uint64_t new_blocks, uint64_t new_blocks_new_obj,
-    send_setup_check_t *ssc, send_delta_t **sdp)
+static send_delta_t *
+send_delta_alloc(objset_t *ref_os, send_refs_t *refs, send_setup_check_t *ssc)
 {
-	send_delta_t *sd;
+	send_delta_t *sd = kmem_zalloc(sizeof (*sd), KM_SLEEP);
 
-	sd = kmem_zalloc(sizeof (*sd), KM_SLEEP);
 	sd->sd_ref_os = ref_os;
 	sd->sd_refs = refs;
 	sd->sd_check = ssc;
@@ -2325,6 +2323,142 @@ send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
 	avl_create(&sd->sd_sketch, delta_sketch_compare,
 	    sizeof (delta_sketch_entry_t),
 	    offsetof(delta_sketch_entry_t, dse_node));
+	return (sd);
+}
+
+/*
+ * A similarity index can be built ahead of time for a snapshot (see
+ * dmu_send_delta_index()) and passed to later --delta sends from it, which
+ * then skip reading the snapshot.  The file is a header followed by
+ * dih_entries entries, in host byte order.  It is untrusted input: an entry
+ * only nominates a candidate block, which the sender reads from the
+ * fromsnap like any other candidate, so a wrong entry can only make the
+ * stream larger; entries are checked for sane sizes before use.
+ */
+#define	DELTA_INDEX_MAGIC	0x3158444e49544c44ULL	/* "DLTINDX1" */
+#define	DELTA_INDEX_VERSION	1
+#define	DELTA_INDEX_CHUNK	1024	/* entries per read or write */
+
+typedef struct delta_index_header {
+	uint64_t	dih_magic;
+	uint64_t	dih_version;
+	uint64_t	dih_guid;	/* of the snapshot indexed */
+	uint64_t	dih_nsf;	/* ZFS_DELTA_NSF */
+	uint64_t	dih_entries;
+	uint64_t	dih_blocks;	/* blocks sketched */
+	uint64_t	dih_bytes;	/* their logical size */
+	uint64_t	dih_pad;
+} delta_index_header_t;
+
+typedef struct delta_index_entry {
+	uint64_t	die_sf;
+	uint64_t	die_object;
+	uint64_t	die_offset;
+	uint64_t	die_length;
+} delta_index_entry_t;
+
+static int
+delta_index_read(zfs_file_t *fp, void *buf, size_t len)
+{
+	ssize_t resid;
+	int err = zfs_file_read(fp, buf, len, &resid);
+
+	if (err == 0 && resid != 0)
+		err = SET_ERROR(EINVAL);	/* truncated */
+	return (err);
+}
+
+/*
+ * Load a similarity index for the snapshot with the given guid from fd.
+ */
+static int
+send_delta_index_load(send_delta_t *sd, uint64_t guid, int fd)
+{
+	send_setup_check_t *ssc = sd->sd_check;
+	delta_index_header_t dih;
+	delta_index_entry_t *buf;
+	zfs_file_t *fp;
+	int err;
+
+	if ((fp = zfs_file_get(fd)) == NULL)
+		return (SET_ERROR(EBADF));
+	err = delta_index_read(fp, &dih, sizeof (dih));
+	if (err == 0 && (dih.dih_magic != DELTA_INDEX_MAGIC ||
+	    dih.dih_version != DELTA_INDEX_VERSION ||
+	    dih.dih_nsf != ZFS_DELTA_NSF || dih.dih_guid != guid))
+		err = SET_ERROR(EINVAL);
+	/* Bound memory as building the index would. */
+	if (err == 0 && dih.dih_entries >
+	    zfs_send_delta_sketch_max_blocks * ZFS_DELTA_NSF)
+		err = SET_ERROR(E2BIG);
+	if (err != 0) {
+		zfs_file_put(fp);
+		return (err);
+	}
+
+	send_setup_phase(ssc, ZFS_SEND_PHASE_DELTA_INDEX,
+	    dih.dih_entries * sizeof (delta_index_entry_t));
+	buf = vmem_alloc(DELTA_INDEX_CHUNK * sizeof (*buf), KM_SLEEP);
+	for (uint64_t left = dih.dih_entries; left > 0 && err == 0; ) {
+		uint64_t n = MIN(left, DELTA_INDEX_CHUNK);
+
+		if ((err = send_setup_check(ssc)) != 0 ||
+		    (err = delta_index_read(fp, buf, n * sizeof (*buf))) != 0)
+			break;
+		for (uint64_t i = 0; i < n; i++) {
+			delta_index_entry_t *die = &buf[i];
+			delta_sketch_entry_t search = { .dse_sf = die->die_sf };
+			avl_index_t where;
+
+			if (die->die_length == 0 ||
+			    die->die_length > SPA_MAXBLOCKSIZE ||
+			    P2PHASE(die->die_length, SPA_MINBLOCKSIZE) != 0 ||
+			    die->die_offset % die->die_length != 0) {
+				err = SET_ERROR(EINVAL);
+				break;
+			}
+			if (avl_find(&sd->sd_sketch, &search, &where) != NULL)
+				continue;
+			delta_sketch_entry_t *dse = kmem_alloc(sizeof (*dse),
+			    KM_SLEEP);
+			dse->dse_sf = die->die_sf;
+			dse->dse_object = die->die_object;
+			dse->dse_offset = die->die_offset;
+			dse->dse_length = die->die_length;
+			avl_insert(&sd->sd_sketch, dse, where);
+		}
+		send_setup_progress(ssc, n * sizeof (*buf));
+		left -= n;
+	}
+	vmem_free(buf, DELTA_INDEX_CHUNK * sizeof (*buf));
+	zfs_file_put(fp);
+	if (err == 0) {
+		sd->sd_sketch_blocks = dih.dih_blocks;
+		sd->sd_sketch_bytes = dih.dih_bytes;
+		REFS_STAT_BUMP(send_delta_index_loaded);
+	}
+	return (err);
+}
+
+static int
+send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
+    uint64_t new_blocks, uint64_t new_blocks_new_obj, int indexfd,
+    send_setup_check_t *ssc, send_delta_t **sdp)
+{
+	send_delta_t *sd = send_delta_alloc(ref_os, refs, ssc);
+
+	/* A prebuilt index replaces reading the fromsnap. */
+	if (indexfd >= 0) {
+		int err = send_delta_index_load(sd,
+		    dsl_dataset_phys(fromds)->ds_guid, indexfd);
+		if (err != 0) {
+			send_delta_destroy(sd);
+			*sdp = NULL;
+			return (err);
+		}
+		*sdp = sd;
+		return (0);
+	}
 
 	/*
 	 * When nearly all new data is in files the fromsnap already has (a
@@ -2360,6 +2494,113 @@ send_delta_create(dsl_dataset_t *fromds, objset_t *ref_os, send_refs_t *refs,
 	}
 	*sdp = sd;
 	return (0);
+}
+
+/*
+ * Write the similarity index sd to the send output: see
+ * send_delta_index_load() for the format.
+ */
+static int
+send_delta_index_write(send_delta_t *sd, uint64_t guid, objset_t *os,
+    dmu_send_outparams_t *dsop)
+{
+	delta_index_header_t dih = {
+		.dih_magic = DELTA_INDEX_MAGIC,
+		.dih_version = DELTA_INDEX_VERSION,
+		.dih_guid = guid,
+		.dih_nsf = ZFS_DELTA_NSF,
+		.dih_entries = avl_numnodes(&sd->sd_sketch),
+		.dih_blocks = sd->sd_sketch_blocks,
+		.dih_bytes = sd->sd_sketch_bytes,
+	};
+	delta_index_entry_t *buf;
+	int n = 0, err;
+
+	err = dsop->dso_outfunc(os, &dih, sizeof (dih), dsop->dso_arg);
+	if (err != 0)
+		return (err);
+	buf = vmem_alloc(DELTA_INDEX_CHUNK * sizeof (*buf), KM_SLEEP);
+	for (delta_sketch_entry_t *dse = avl_first(&sd->sd_sketch);
+	    dse != NULL && err == 0; dse = AVL_NEXT(&sd->sd_sketch, dse)) {
+		buf[n].die_sf = dse->dse_sf;
+		buf[n].die_object = dse->dse_object;
+		buf[n].die_offset = dse->dse_offset;
+		buf[n].die_length = dse->dse_length;
+		if (++n == DELTA_INDEX_CHUNK) {
+			err = dsop->dso_outfunc(os, buf, n * sizeof (*buf),
+			    dsop->dso_arg);
+			n = 0;
+		}
+	}
+	if (err == 0 && n > 0)
+		err = dsop->dso_outfunc(os, buf, n * sizeof (*buf),
+		    dsop->dso_arg);
+	vmem_free(buf, DELTA_INDEX_CHUNK * sizeof (*buf));
+	return (err);
+}
+
+/*
+ * Build the similarity index of a snapshot, as a --delta send from it
+ * would, and write it to the send output instead of a stream.  Later
+ * --delta sends from the snapshot can load it instead of reading the
+ * snapshot again.
+ */
+int
+dmu_send_delta_index(const char *snapname, dmu_send_outparams_t *dsop)
+{
+	dsl_pool_t *dp;
+	dsl_dataset_t *ds;
+	objset_t *os;
+	int err;
+
+	if ((err = dsl_pool_hold(snapname, FTAG, &dp)) != 0)
+		return (err);
+	if ((err = dsl_dataset_hold(dp, snapname, FTAG, &ds)) != 0) {
+		dsl_pool_rele(dp, FTAG);
+		return (err);
+	}
+	if (!ds->ds_is_snapshot)
+		err = SET_ERROR(EINVAL);
+	if (err == 0)
+		err = dmu_objset_from_ds(ds, &os);
+	/* Sends with --delta do not use encrypted sources. */
+	if (err == 0 && os->os_encrypted)
+		err = SET_ERROR(EINVAL);
+	if (err != 0) {
+		dsl_dataset_rele(ds, FTAG);
+		dsl_pool_rele(dp, FTAG);
+		return (err);
+	}
+	dsl_dataset_long_hold(ds, FTAG);
+	dsl_pool_rele(dp, FTAG);
+
+	dmu_sendstatus_t dss = { 0 };
+	char *name = kmem_alloc(ZFS_MAX_DATASET_NAME_LEN, KM_SLEEP);
+	send_setup_check_t ssc = { .ssc_dso = dsop, .ssc_dssp = &dss,
+	    .ssc_name = name };
+	send_delta_t *sd = send_delta_alloc(os, NULL, &ssc);
+
+	dsl_dataset_name(ds, name);
+	send_setup_phase(&ssc, ZFS_SEND_PHASE_DELTA_INDEX,
+	    MIN(dsl_dataset_phys(ds)->ds_uncompressed_bytes,
+	    zfs_send_delta_sketch_max_bytes));
+	err = traverse_dataset(ds, 0, TRAVERSE_PRE | TRAVERSE_PREFETCH,
+	    delta_sketch_cb, sd);
+	send_setup_phase(&ssc, ZFS_SEND_PHASE_STREAM, 0);
+	/* As for a send, an index cut short by the limits is still useful. */
+	if (ssc.ssc_err != 0)
+		err = ssc.ssc_err;
+	else if (err == ERANGE)
+		err = 0;
+	if (err == 0)
+		err = send_delta_index_write(sd,
+		    dsl_dataset_phys(ds)->ds_guid, os, dsop);
+
+	send_delta_destroy(sd);
+	kmem_free(name, ZFS_MAX_DATASET_NAME_LEN);
+	dsl_dataset_long_rele(ds, FTAG);
+	dsl_dataset_rele(ds, FTAG);
+	return (err);
 }
 
 /*
@@ -3024,6 +3265,7 @@ struct dmu_send_params {
 	boolean_t savedok;
 	boolean_t refsok;
 	boolean_t deltaok;
+	int deltaindexfd;	/* prebuilt similarity index, or -1 */
 	uint64_t resumeobj;
 	uint64_t resumeoff;
 	uint64_t saved_guid;
@@ -3637,8 +3879,8 @@ dmu_send_impl(struct dmu_send_params *dspp)
 		    &new_blocks_new_obj, &ssc, &refs);
 		if (err == 0 && dspp->deltaok)
 			err = send_delta_create(refs_fromds, refs_from_os,
-			    refs, new_blocks, new_blocks_new_obj, &ssc,
-			    &dsc.dsc_delta);
+			    refs, new_blocks, new_blocks_new_obj,
+			    dspp->deltaindexfd, &ssc, &dsc.dsc_delta);
 		send_setup_phase(&ssc, ZFS_SEND_PHASE_STREAM, 0);
 		kmem_free(name, ZFS_MAX_DATASET_NAME_LEN);
 		if (err != 0)
@@ -3858,6 +4100,7 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 	dspp.embedok = embedok;
 	dspp.large_block_ok = large_block_ok;
 	dspp.compressok = compressok;
+	dspp.deltaindexfd = -1;
 	dspp.outfd = outfd;
 	dspp.off = off;
 	dspp.dso = dsop;
@@ -3938,7 +4181,7 @@ dmu_send_obj(const char *pool, uint64_t tosnap, uint64_t fromsnap,
 int
 dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     boolean_t large_block_ok, boolean_t compressok, boolean_t rawok,
-    boolean_t savedok, boolean_t refsok, boolean_t deltaok,
+    boolean_t savedok, boolean_t refsok, boolean_t deltaok, int deltaindexfd,
     uint64_t resumeobj, uint64_t resumeoff, const char *redactbook, int outfd,
     offset_t *off, dmu_send_outparams_t *dsop)
 {
@@ -3964,6 +4207,7 @@ dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
 	dspp.savedok = savedok;
 	dspp.refsok = refsok;
 	dspp.deltaok = deltaok;
+	dspp.deltaindexfd = deltaindexfd;
 
 	if (fromsnap != NULL && strpbrk(fromsnap, "@#") == NULL)
 		return (SET_ERROR(EINVAL));

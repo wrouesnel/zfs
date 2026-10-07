@@ -879,7 +879,7 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
 static int
 lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
     enum lzc_send_flags flags, uint64_t resumeobj, uint64_t resumeoff,
-    const char *redactbook)
+    const char *redactbook, int deltaindexfd)
 {
 	nvlist_t *args;
 	int err;
@@ -902,6 +902,8 @@ lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "refsok");
 	if (flags & LZC_SEND_FLAG_DELTA)
 		fnvlist_add_boolean(args, "deltaok");
+	if (deltaindexfd >= 0)
+		fnvlist_add_int32(args, "deltaindexfd", deltaindexfd);
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -921,6 +923,7 @@ struct lzc_send_resume_redacted {
 	uint64_t resumeobj;
 	uint64_t resumeoff;
 	const char *redactbook;
+	int deltaindexfd;
 };
 
 static int
@@ -929,7 +932,7 @@ lzc_send_resume_redacted_cb(int fd, void *arg)
 	struct lzc_send_resume_redacted *zsrr = arg;
 	return (lzc_send_resume_redacted_cb_impl(zsrr->snapname, zsrr->from,
 	    fd, zsrr->flags, zsrr->resumeobj, zsrr->resumeoff,
-	    zsrr->redactbook));
+	    zsrr->redactbook, zsrr->deltaindexfd));
 }
 
 int
@@ -944,8 +947,51 @@ lzc_send_resume_redacted(const char *snapname, const char *from, int fd,
 		.resumeobj = resumeobj,
 		.resumeoff = resumeoff,
 		.redactbook = redactbook,
+		.deltaindexfd = -1,
 	};
 	return (lzc_send_wrapper(lzc_send_resume_redacted_cb, fd, &zsrr));
+}
+
+/*
+ * Like lzc_send() with LZC_SEND_FLAG_DELTA, but read the similarity index
+ * of the incremental source "from" from indexfd, as written by
+ * lzc_send_delta_index(), instead of building it.
+ */
+int
+lzc_send_delta_indexed(const char *snapname, const char *from, int fd,
+    enum lzc_send_flags flags, int indexfd)
+{
+	struct lzc_send_resume_redacted zsrr = {
+		.snapname = snapname,
+		.from = from,
+		.flags = flags | LZC_SEND_FLAG_DELTA,
+		.deltaindexfd = indexfd,
+	};
+	return (lzc_send_wrapper(lzc_send_resume_redacted_cb, fd, &zsrr));
+}
+
+static int
+lzc_send_delta_index_cb(int fd, void *arg)
+{
+	nvlist_t *args = fnvlist_alloc();
+	int err;
+
+	fnvlist_add_int32(args, "fd", fd);
+	fnvlist_add_boolean(args, "deltaindexbuild");
+	err = lzc_ioctl(ZFS_IOC_SEND_NEW, arg, args, NULL);
+	nvlist_free(args);
+	return (err);
+}
+
+/*
+ * Write the similarity index of snapshot snapname to fd, for later
+ * lzc_send_delta_indexed() calls that send incrementals from it.
+ */
+int
+lzc_send_delta_index(const char *snapname, int fd)
+{
+	return (lzc_send_wrapper(lzc_send_delta_index_cb, fd,
+	    (void *)snapname));
 }
 
 /*

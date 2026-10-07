@@ -2212,6 +2212,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send-cpL_varied_recsize.ksh \
 	functional/rsend/send_delta_compressed.ksh \
 	functional/rsend/send_delta_corrupt.ksh \
+	functional/rsend/send_delta_index.ksh \
 	functional/rsend/send_delta_inplace.ksh \
 	functional/rsend/send_delta_interrupt.ksh \
 	functional/rsend/send_delta_invalid.ksh \
