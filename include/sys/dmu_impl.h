@@ -249,6 +249,9 @@ typedef struct dmu_sendstatus {
 	proc_t *dss_proc;
 	offset_t *dss_off;
 	uint64_t dss_blocks; /* blocks visited during the sending process */
+	uint64_t dss_phase; /* zfs_send_phase_t */
+	uint64_t dss_phase_done; /* progress of a preparation phase */
+	uint64_t dss_phase_total; /* its expected total, or 0 if unknown */
 } dmu_sendstatus_t;
 
 /*

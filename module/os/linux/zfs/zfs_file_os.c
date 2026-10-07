@@ -312,6 +312,24 @@ zfs_file_off(zfs_file_t *fp)
 }
 
 /*
+ * Check whether the other end of a pipe or socket has gone away, so that a
+ * writer with nothing to write yet can stop early.
+ *
+ * fp - pointer to file (pipe, socket, etc) to check
+ *
+ * Returns EPIPE if it has, and 0 if not or if this cannot be told.
+ */
+int
+zfs_file_peer_gone(zfs_file_t *fp)
+{
+	/* With no poll table, ->poll() only reports the current state. */
+	if (fp->f_op->poll == NULL)
+		return (0);
+	__poll_t mask = fp->f_op->poll(fp, NULL);
+	return ((mask & (EPOLLERR | EPOLLHUP)) ? SET_ERROR(EPIPE) : 0);
+}
+
+/*
  * Request file pointer private data
  *
  * fp - pointer to file

@@ -21,6 +21,7 @@
 #include <assert.h>
 #include <cityhash.h>
 #include <ctype.h>
+#include <err.h>
 #include <errno.h>
 #include <fcntl.h>
 #include <libzfs.h>
@@ -234,7 +235,7 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 		case DRR_BEGIN:
 		{
 			struct drr_begin *drrb = &drr->drr_u.drr_begin;
-			int fflags;
+			uint64_t fflags;
 			ZIO_SET_CHECKSUM(&stream_cksum, 0, 0, 0, 0);
 			VERIFY0(begin++);
 			seen = B_TRUE;
@@ -243,6 +244,16 @@ zfs_redup_stream(int infd, int outfd, boolean_t verbose)
 
 			/* clear the DEDUP feature flag for this stream */
 			fflags = DMU_GET_FEATUREFLAGS(drrb->drr_versioninfo);
+			/*
+			 * Fromsnap references point outside the stream, so
+			 * there is nothing here to expand them from.
+			 */
+			if (fflags & DMU_BACKUP_FEATURE_FROMSNAP_REFS) {
+				errx(EXIT_FAILURE, "stream references "
+				    "blocks in its incremental source "
+				    "(zfs send --refs) and cannot be "
+				    "converted");
+			}
 			fflags &= ~(DMU_BACKUP_FEATURE_DEDUP |
 			    DMU_BACKUP_FEATURE_DEDUPPROPS);
 			/* cppcheck-suppress syntaxError */

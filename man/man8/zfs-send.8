@@ -31,7 +31,7 @@
 .\" Copyright 2019 Joyent, Inc.
 .\" Copyright (c) 2024, Klara, Inc.
 .\"
-.Dd August 29, 2025
+.Dd October 1, 2026
 .Dt ZFS-SEND 8
 .Os
 .
@@ -42,12 +42,14 @@
 .Nm zfs
 .Cm send
 .Op Fl DLPVbcehnpsvw
+.Op Fl -refs
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
 .Nm zfs
 .Cm send
 .Op Fl DLPVcensvw
+.Op Fl -refs
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Nm zfs
@@ -76,6 +78,7 @@
 .Nm zfs
 .Cm send
 .Op Fl DLPVbcehnpsvw
+.Op Fl -refs
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -294,6 +297,11 @@ The receiving system must also support this feature.
 Sends of encrypted datasets must use
 .Fl w
 when using this flag.
+.It Fl -refs
+Send blocks that the incremental source snapshot already references as
+references to it, rather than as data.
+See
+.Sx Fromsnap References .
 .It Fl s , -skip-missing
 Allows sending a replication stream even when there are snapshots missing in the
 hierarchy.
@@ -320,6 +328,7 @@ You will be able to receive your streams on future versions of ZFS.
 .Nm zfs
 .Cm send
 .Op Fl DLPVcenvw
+.Op Fl -refs
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Xc
@@ -435,6 +444,11 @@ character and following
 If the incremental target is a clone, the incremental source can be the origin
 snapshot, or an earlier snapshot in the origin's filesystem, or the origin's
 origin, etc.
+.It Fl -refs
+Send blocks that the incremental source snapshot already references as
+references to it, rather than as data.
+See
+.Sx Fromsnap References .
 .It Fl n , -dryrun
 Do a dry-run
 .Pq Qq No-op
@@ -606,6 +620,63 @@ for more information on the purpose of this operation.
 If a redact operation fails partway through (due to an error or a system
 failure), the redaction can be resumed by rerunning the same command.
 .El
+.Ss Fromsnap References
+The receiver of an incremental stream already holds the incremental source.
+With
+.Fl -refs ,
+blocks written after the source whose data the source also references are sent
+as small references to their location in the source, and the receiver takes the
+data from its own copy of that snapshot.
+Such blocks are created by deduplication
+.Pq Sy dedup Ns = Ns Sy on
+and by block cloning
+.Pq for example Nm cp Fl -reflink ,
+when data present in the source is written or copied again.
+Blocks that are merely similar are still sent in full.
+.Pp
+The receiver clones the referenced block when its pool has the
+.Sy block_cloning
+feature enabled and
+.Sy zfs_bclone_enabled
+is set, which also saves space on the receiver; otherwise it reads the block
+from its copy of the source and writes it.
+The data never crosses the wire in either case.
+.Pp
+Before the stream starts, the sending system scans the block pointers of the
+changed blocks and of the source to find the references; no file data is read.
+The number of blocks tracked per send is limited by
+.Sy zfs_send_refs_max_blocks ;
+blocks beyond it are sent in full.
+The size estimate of
+.Fl n
+does not account for references.
+.Pp
+References are only used for incremental sends from a snapshot.
+.Fl -refs
+cannot be combined with raw
+.Pq Fl w
+or redacted sends, and is ignored when sending an encrypted dataset without
+.Fl w .
+A stream that contains references can only be received by software that
+supports them; when no references are found, a regular stream is generated.
+Resuming an interrupted receive with
+.Nm zfs Cm send Fl t
+keeps using references.
+.Nm zstream Cm redup
+cannot convert such streams.
+.Pp
+References are found before anything is written.
+Meanwhile, the progress lines of
+.Fl v
+show how far that has got, in blocks scanned.
+With
+.Fl P ,
+these lines have three more fields: the phase
+.Pq Sy refs_scan No or Sy refs_resolve ,
+its progress, and its expected total, or 0 if not known.
+The send stops promptly if it is interrupted or its output is closed
+meanwhile.
+.
 .Ss Redaction
 ZFS has support for a limited version of data subsetting, in the form of
 redaction.

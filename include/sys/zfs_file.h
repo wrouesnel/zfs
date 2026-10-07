@@ -57,6 +57,7 @@ int zfs_file_getattr(zfs_file_t *fp, zfs_file_attr_t *zfattr);
 int zfs_file_fsync(zfs_file_t *fp, int flags);
 int zfs_file_deallocate(zfs_file_t *fp, loff_t offset, loff_t len);
 loff_t zfs_file_off(zfs_file_t *fp);
+int zfs_file_peer_gone(zfs_file_t *fp);
 int zfs_file_unlink(const char *);
 
 zfs_file_t *zfs_file_get(int fd);

@@ -1509,6 +1509,24 @@ zfs_file_off(zfs_file_t *fp)
 }
 
 /*
+ * Check whether the other end of a pipe or socket has gone away, so that a
+ * writer with nothing to write yet can stop early.
+ *
+ * fp - pointer to file (pipe, socket, etc) to check
+ *
+ * Returns EPIPE if it has, and 0 if not or if this cannot be told.
+ */
+int
+zfs_file_peer_gone(zfs_file_t *fp)
+{
+	struct pollfd pfd = { .fd = fp->f_fd, .events = 0 };
+
+	if (poll(&pfd, 1, 0) == 1 && (pfd.revents & (POLLERR | POLLHUP)))
+		return (EPIPE);
+	return (0);
+}
+
+/*
  * unlink file
  *
  * path - fully qualified file path

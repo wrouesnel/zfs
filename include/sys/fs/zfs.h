@@ -1590,6 +1590,18 @@ typedef enum zfs_ioc {
 } zfs_ioc_t;
 
 /*
+ * What a send is doing, as reported by ZFS_IOC_SEND_PROGRESS.  With --refs,
+ * the stream is prepared before anything is written; the other phases
+ * report how far that has got.  Older kernels always report
+ * ZFS_SEND_PHASE_STREAM.
+ */
+typedef enum zfs_send_phase {
+	ZFS_SEND_PHASE_STREAM = 0,	/* writing the stream */
+	ZFS_SEND_PHASE_REFS_SCAN,	/* scanning changed blocks (blocks) */
+	ZFS_SEND_PHASE_REFS_RESOLVE,	/* scanning the fromsnap (blocks) */
+} zfs_send_phase_t;
+
+/*
  * zvol ioctl to get dataset name
  */
 #define	BLKZNAME		_IOR(0x12, 125, char[ZFS_MAX_DATASET_NAME_LEN])

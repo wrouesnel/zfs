@@ -737,7 +737,7 @@ typedef struct send_dump_data {
 	uint64_t prevsnap_obj;
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
-	boolean_t large_block, compress, raw, holds;
+	boolean_t large_block, compress, raw, holds, refs;
 	boolean_t progressastitle;
 	int outfd;
 	boolean_t err;
@@ -814,7 +814,7 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 {
 	zfs_cmd_t zc = {"\0"};
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
-	nvlist_t *thisdbg;
+	nvlist_t *thisdbg = NULL;
 
 	assert(zhp->zfs_type == ZFS_TYPE_SNAPSHOT);
 	assert(fromsnap_obj == 0 || !fromorigin);
@@ -832,9 +832,25 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 			fnvlist_add_string(thisdbg, "fromsnap", fromsnap);
 	}
 
-	if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
+	int error = 0;
+	if ((flags & LZC_SEND_FLAG_REFS) && fromsnap_obj != 0 &&
+	    fromsnap != NULL && fromsnap[0] != '\0') {
+		/*
+		 * Fromsnap references are only available through
+		 * ZFS_IOC_SEND_NEW, which names the incremental source.
+		 */
+		char fromname[ZFS_MAX_DATASET_NAME_LEN];
+
+		(void) strlcpy(fromname, zhp->zfs_name, sizeof (fromname));
+		*(strchr(fromname, '@') + 1) = '\0';
+		(void) strlcat(fromname, fromsnap, sizeof (fromname));
+		error = lzc_send(zhp->zfs_name, fromname, outfd, flags);
+	} else if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
+		error = errno;
+	}
+
+	if (error != 0) {
 		char errbuf[ERRBUFLEN];
-		int error = errno;
 
 		(void) snprintf(errbuf, sizeof (errbuf), "%s '%s'",
 		    dgettext(TEXT_DOMAIN, "warning: cannot send"),
@@ -878,11 +894,11 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 		case EFAULT:
 		case EROFS:
 		case EINVAL:
-			zfs_error_aux(hdl, "%s", zfs_strerror(errno));
+			zfs_error_aux(hdl, "%s", zfs_strerror(error));
 			return (zfs_error(hdl, EZFS_BADBACKUP, errbuf));
 
 		default:
-			return (zfs_standard_error(hdl, errno, errbuf));
+			return (zfs_standard_error(hdl, error, errbuf));
 		}
 	}
 
@@ -930,6 +946,32 @@ zfs_send_progress(zfs_handle_t *zhp, int fd, uint64_t *bytes_written,
 	return (0);
 }
 
+/*
+ * Like zfs_send_progress(), and also report which phase the send is in:
+ * while --refs prepares the stream, phase is not ZFS_SEND_PHASE_STREAM
+ * and phase_done and phase_total (0 if unknown) report how far it has got.
+ */
+static int
+send_progress_phase(zfs_handle_t *zhp, int fd, uint64_t *bytes_written,
+    uint64_t *blocks_visited, zfs_send_phase_t *phase, uint64_t *phase_done,
+    uint64_t *phase_total)
+{
+	zfs_cmd_t zc = {"\0"};
+
+	*bytes_written = *blocks_visited = *phase_done = *phase_total = 0;
+	*phase = ZFS_SEND_PHASE_STREAM;
+	(void) strlcpy(zc.zc_name, zhp->zfs_name, sizeof (zc.zc_name));
+	zc.zc_cookie = fd;
+	if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND_PROGRESS, &zc) != 0)
+		return (errno);
+	*bytes_written = zc.zc_cookie;
+	*blocks_visited = zc.zc_objset_type;
+	*phase = zc.zc_obj;
+	*phase_done = zc.zc_fromobj;
+	*phase_total = zc.zc_guid;
+	return (0);
+}
+
 static volatile boolean_t send_progress_thread_signal_duetotimer;
 static void
 send_progress_thread_act(int sig, siginfo_t *info, void *ucontext)
@@ -963,6 +1005,47 @@ timer_delete_cleanup(void *timer)
 	pthread_sigmask(SIG_BLOCK, &new, old); \
 }
 
+/*
+ * Describe what a send preparing its stream (--refs) is doing,
+ * for the progress output: readable text, or for parsable output
+ * tab-separated keyword, progress and expected total (0 if unknown).
+ * Empty once the stream is being written.
+ */
+static void
+send_phase_describe(zfs_send_phase_t phase, uint64_t done, uint64_t total,
+    boolean_t parsable, char *buf, size_t len)
+{
+	static const char *const keywords[] = {
+		[ZFS_SEND_PHASE_REFS_SCAN] = "refs_scan",
+		[ZFS_SEND_PHASE_REFS_RESOLVE] = "refs_resolve",
+	};
+	char dbuf[16];
+
+	buf[0] = '\0';
+	if (phase <= ZFS_SEND_PHASE_STREAM ||
+	    phase > ZFS_SEND_PHASE_REFS_RESOLVE)
+		return;
+	if (parsable) {
+		(void) snprintf(buf, len, "\t%s\t%llu\t%llu", keywords[phase],
+		    (u_longlong_t)done, (u_longlong_t)total);
+		return;
+	}
+	switch (phase) {
+	case ZFS_SEND_PHASE_REFS_SCAN:
+		zfs_nicenum(done, dbuf, sizeof (dbuf));
+		(void) snprintf(buf, len, dgettext(TEXT_DOMAIN,
+		    " (finding references: %s blocks scanned)"), dbuf);
+		break;
+	case ZFS_SEND_PHASE_REFS_RESOLVE:
+		zfs_nicenum(done, dbuf, sizeof (dbuf));
+		(void) snprintf(buf, len, dgettext(TEXT_DOMAIN,
+		    " (locating references: %s blocks scanned)"), dbuf);
+		break;
+	default:
+		break;
+	}
+}
+
 static void *
 send_progress_thread(void *arg)
 {
@@ -970,6 +1053,9 @@ send_progress_thread(void *arg)
 	zfs_handle_t *zhp = pa->pa_zhp;
 	uint64_t bytes;
 	uint64_t blocks;
+	zfs_send_phase_t phase;
+	uint64_t phase_done, phase_total;
+	char what[128];
 	uint64_t total = pa->pa_size / 100;
 	char buf[16];
 	time_t t;
@@ -1009,8 +1095,8 @@ send_progress_thread(void *arg)
 	 */
 	for (;;) {
 		pause();
-		if ((err = zfs_send_progress(zhp, pa->pa_fd, &bytes,
-		    &blocks)) != 0) {
+		if ((err = send_progress_phase(zhp, pa->pa_fd, &bytes, &blocks,
+		    &phase, &phase_done, &phase_total)) != 0) {
 			if (err == EINTR || err == ENOENT)
 				err = 0;
 			/* Use break to reach pthread_cleanup_pop() below. */
@@ -1019,6 +1105,8 @@ send_progress_thread(void *arg)
 
 		(void) time(&t);
 		localtime_r(&t, &tm);
+		send_phase_describe(phase, phase_done, phase_total,
+		    pa->pa_parsable, what, sizeof (what));
 
 		if (pa->pa_astitle) {
 			char buf_bytes[16];
@@ -1027,32 +1115,37 @@ send_progress_thread(void *arg)
 			zfs_nicenum(bytes, buf_bytes, sizeof (buf_bytes));
 			zfs_nicenum(pa->pa_size, buf_size, sizeof (buf_size));
 			pct = (total > 0) ? bytes / total : 100;
-			zfs_setproctitle("sending %s (%d%%: %s/%s)",
-			    zhp->zfs_name, MIN(pct, 100), buf_bytes, buf_size);
+			if (phase != ZFS_SEND_PHASE_STREAM && !pa->pa_parsable)
+				zfs_setproctitle("sending %s%s", zhp->zfs_name,
+				    what);
+			else
+				zfs_setproctitle("sending %s (%d%%: %s/%s)",
+				    zhp->zfs_name, MIN(pct, 100), buf_bytes,
+				    buf_size);
 		}
 
 		if (pa->pa_verbosity >= 2 && pa->pa_parsable) {
 			(void) fprintf(stderr,
-			    "%02d:%02d:%02d\t%llu\t%llu\t%s\n",
+			    "%02d:%02d:%02d\t%llu\t%llu\t%s%s\n",
 			    tm.tm_hour, tm.tm_min, tm.tm_sec,
 			    (u_longlong_t)bytes, (u_longlong_t)blocks,
-			    zhp->zfs_name);
+			    zhp->zfs_name, what);
 		} else if (pa->pa_verbosity >= 2) {
 			zfs_nicenum(bytes, buf, sizeof (buf));
 			(void) fprintf(stderr,
-			    "%02d:%02d:%02d   %5s    %8llu    %s\n",
+			    "%02d:%02d:%02d   %5s    %8llu    %s%s\n",
 			    tm.tm_hour, tm.tm_min, tm.tm_sec,
-			    buf, (u_longlong_t)blocks, zhp->zfs_name);
+			    buf, (u_longlong_t)blocks, zhp->zfs_name, what);
 		} else if (pa->pa_parsable) {
-			(void) fprintf(stderr, "%02d:%02d:%02d\t%llu\t%s\n",
+			(void) fprintf(stderr, "%02d:%02d:%02d\t%llu\t%s%s\n",
 			    tm.tm_hour, tm.tm_min, tm.tm_sec,
-			    (u_longlong_t)bytes, zhp->zfs_name);
+			    (u_longlong_t)bytes, zhp->zfs_name, what);
 		} else if (pa->pa_progress ||
 		    !send_progress_thread_signal_duetotimer) {
 			zfs_nicebytes(bytes, buf, sizeof (buf));
-			(void) fprintf(stderr, "%02d:%02d:%02d   %5s   %s\n",
+			(void) fprintf(stderr, "%02d:%02d:%02d   %5s   %s%s\n",
 			    tm.tm_hour, tm.tm_min, tm.tm_sec,
-			    buf, zhp->zfs_name);
+			    buf, zhp->zfs_name, what);
 		}
 	}
 	pthread_cleanup_pop(B_TRUE);
@@ -1190,6 +1283,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		flags |= LZC_SEND_FLAG_COMPRESS;
 	if (sdd->raw)
 		flags |= LZC_SEND_FLAG_RAW;
+	if (sdd->refs)
+		flags |= LZC_SEND_FLAG_REFS;
 
 	if (!sdd->doall && !isfromsnap && !istosnap) {
 		if (sdd->replicate) {
@@ -1610,6 +1705,8 @@ lzc_flags_from_sendflags(const sendflags_t *flags)
 		lzc_flags |= LZC_SEND_FLAG_RAW;
 	if (flags->saved)
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
+	if (flags->refs)
+		lzc_flags |= LZC_SEND_FLAG_REFS;
 
 	return (lzc_flags);
 }
@@ -1811,6 +1908,8 @@ lzc_flags_from_resume_nvl(nvlist_t *resume_nvl)
 		lzc_flags |= LZC_SEND_FLAG_RAW;
 	if (nvlist_exists(resume_nvl, "savedok"))
 		lzc_flags |= LZC_SEND_FLAG_SAVED;
+	if (nvlist_exists(resume_nvl, "refsok"))
+		lzc_flags |= LZC_SEND_FLAG_REFS;
 
 	return (lzc_flags);
 }
@@ -2207,7 +2306,7 @@ send_prelim_records(zfs_handle_t *zhp, const char *from, int fd,
 	char *packbuf = NULL;
 	size_t buflen = 0;
 	zio_cksum_t zc = { {0} };
-	int featureflags = 0;
+	uint64_t featureflags = 0;
 	/* name of filesystem/volume that contains snapshot we are sending */
 	char tofs[ZFS_MAX_DATASET_NAME_LEN];
 	/* short name of snap we are sending */
@@ -2415,6 +2514,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.progressastitle = flags->progressastitle;
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
+	sdd.refs = flags->refs;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
 	sdd.raw = flags->raw;
