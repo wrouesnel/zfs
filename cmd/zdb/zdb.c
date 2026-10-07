@@ -64,6 +64,7 @@
 #include <sys/dmu_traverse.h>
 #include <sys/zio_checksum.h>
 #include <sys/zio_compress.h>
+#include <sys/zfs_delta.h>
 #include <sys/zfs_fuid.h>
 #include <sys/arc.h>
 #include <sys/arc_impl.h>
@@ -105,6 +106,7 @@ enum {
 	ARG_ALLOCATED = 256,
 	ARG_BLOCK_BIN_MODE,
 	ARG_BLOCK_CLASSES,
+	ARG_SIMULATE_DELTA,
 };
 
 static const char cmdname[] = "zdb";
@@ -811,6 +813,8 @@ usage(void)
 	    "report stats on zdb's I/O\n");
 	(void) fprintf(stderr, "        -S --simulate-dedup          "
 	    "simulate dedup to measure effect\n");
+	(void) fprintf(stderr, "        --simulate-delta             "
+	    "estimate the effect of storing similar blocks as patches\n");
 	(void) fprintf(stderr, "        -v --verbose                 "
 	    "verbose (applies to all others)\n");
 	(void) fprintf(stderr, "        -y --livelist                "
@@ -8419,6 +8423,276 @@ zdb_ddt_add_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
 	return (0);
 }
 
+/*
+ * --simulate-delta: estimate how much space storing data blocks as patches
+ * against similar blocks (as zfs send --delta does on the wire) would save
+ * on top of what is already shared.  Exact copies (dedup, clones) are
+ * counted once.  Each remaining data block is read and sketched; then each
+ * block whose sketch matches a block stored in full is encoded as a patch
+ * against it, the patch compressed with LZ4 and rounded up to the pool's
+ * sector size, and counted as saved if that is smaller than the block's
+ * allocation.  Patches are one level deep: a block used as a base is
+ * never itself a patch, and a patch is never a base.
+ */
+typedef struct zdb_dsim_key {
+	ddt_key_t	dk_key;		/* first, for ddt_key_compare() */
+	avl_node_t	dk_node;
+} zdb_dsim_key_t;
+
+typedef struct zdb_dsim_sf {
+	uint64_t	dsf_sf;
+	uint64_t	dsf_blk;	/* first block with this feature */
+	avl_node_t	dsf_node;
+} zdb_dsim_sf_t;
+
+typedef struct zdb_dsim_blk {
+	blkptr_t	db_bp;
+	zbookmark_phys_t db_zb;
+	uint64_t	db_sf[ZFS_DELTA_NSF];
+	boolean_t	db_sketched;
+	boolean_t	db_patched;
+	boolean_t	db_base;
+} zdb_dsim_blk_t;
+
+typedef struct zdb_dsim {
+	avl_tree_t	ds_seen;
+	avl_tree_t	ds_sf;
+	zdb_dsim_blk_t	*ds_blks;
+	uint64_t	ds_nblks;
+	uint64_t	ds_capblks;
+	uint64_t	ds_ref_blocks;
+	uint64_t	ds_ref_asize;
+	uint64_t	ds_lsize;
+	uint64_t	ds_asize;
+	uint64_t	ds_unreadable;
+	uint64_t	ds_sketched;
+} zdb_dsim_t;
+
+static int
+zdb_dsim_sf_compare(const void *a, const void *b)
+{
+	const zdb_dsim_sf_t *x = a, *y = b;
+
+	return (TREE_CMP(x->dsf_sf, y->dsf_sf));
+}
+
+static uint64_t
+zdb_dsim_asize(spa_t *spa, uint64_t psize)
+{
+	return (P2ROUNDUP(psize, 1ULL << spa->spa_min_ashift));
+}
+
+static int
+zdb_dsim_read(spa_t *spa, const blkptr_t *bp, const zbookmark_phys_t *zb,
+    arc_buf_t **abufp)
+{
+	arc_flags_t aflags = ARC_FLAG_WAIT;
+
+	*abufp = NULL;
+	return (arc_read(NULL, spa, bp, arc_getbuf_func, abufp,
+	    ZIO_PRIORITY_ASYNC_READ, ZIO_FLAG_CANFAIL, &aflags, zb));
+}
+
+static int
+zdb_dsim_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
+{
+	(void) zilog, (void) dnp;
+	zdb_dsim_t *ds = arg;
+	zdb_dsim_key_t search, *dk;
+	avl_index_t where;
+	arc_buf_t *abuf;
+
+	if (bp == NULL || zb->zb_level == ZB_DNODE_LEVEL || BP_IS_HOLE(bp) ||
+	    BP_IS_EMBEDDED(bp) || BP_IS_REDACTED(bp) || BP_GET_LEVEL(bp) > 0 ||
+	    DMU_OT_IS_METADATA(BP_GET_TYPE(bp)) || BP_IS_PROTECTED(bp) ||
+	    BP_GET_CHECKSUM(bp) == ZIO_CHECKSUM_OFF)
+		return (0);
+
+	ds->ds_ref_blocks++;
+	ds->ds_ref_asize += zdb_dsim_asize(spa, BP_GET_PSIZE(bp));
+
+	/* Exact copies are already shared (dedup, clones). */
+	ddt_key_fill(&search.dk_key, bp);
+	if (avl_find(&ds->ds_seen, &search, &where) != NULL)
+		return (0);
+	dk = umem_zalloc(sizeof (*dk), UMEM_NOFAIL);
+	dk->dk_key = search.dk_key;
+	avl_insert(&ds->ds_seen, dk, where);
+
+	if (ds->ds_nblks == ds->ds_capblks) {
+		uint64_t cap = MAX(1024, ds->ds_capblks * 2);
+		zdb_dsim_blk_t *nb = umem_zalloc(cap * sizeof (*nb),
+		    UMEM_NOFAIL);
+		if (ds->ds_nblks != 0) {
+			memcpy(nb, ds->ds_blks, ds->ds_nblks * sizeof (*nb));
+			umem_free(ds->ds_blks,
+			    ds->ds_capblks * sizeof (*nb));
+		}
+		ds->ds_blks = nb;
+		ds->ds_capblks = cap;
+	}
+	zdb_dsim_blk_t *db = &ds->ds_blks[ds->ds_nblks];
+	db->db_bp = *bp;
+	db->db_zb = *zb;
+	ds->ds_lsize += BP_GET_LSIZE(bp);
+	ds->ds_asize += zdb_dsim_asize(spa, BP_GET_PSIZE(bp));
+
+	if (zdb_dsim_read(spa, bp, zb, &abuf) != 0) {
+		ds->ds_unreadable++;
+	} else {
+		db->db_sketched = zfs_delta_sketch(abuf->b_data,
+		    BP_GET_LSIZE(bp), db->db_sf);
+		arc_buf_destroy(abuf, &abuf);
+	}
+	if (db->db_sketched) {
+		ds->ds_sketched++;
+		for (int i = 0; i < ZFS_DELTA_NSF; i++) {
+			zdb_dsim_sf_t sfs = { .dsf_sf = db->db_sf[i] };
+			if (avl_find(&ds->ds_sf, &sfs, &where) != NULL)
+				continue;
+			zdb_dsim_sf_t *dsf = umem_zalloc(sizeof (*dsf),
+			    UMEM_NOFAIL);
+			dsf->dsf_sf = db->db_sf[i];
+			dsf->dsf_blk = ds->ds_nblks;
+			avl_insert(&ds->ds_sf, dsf, where);
+		}
+	}
+	ds->ds_nblks++;
+	if (dump_opt[ARG_SIMULATE_DELTA] > 1 && ds->ds_nblks % 100000 == 0)
+		(void) printf("sketched %llu blocks\n",
+		    (u_longlong_t)ds->ds_nblks);
+	return (0);
+}
+
+static void
+dump_simulated_delta(spa_t *spa)
+{
+	zdb_dsim_t ds = { 0 };
+	uint32_t *htab = umem_alloc(ZFS_DELTA_HASH_SIZE * sizeof (uint32_t),
+	    UMEM_NOFAIL);
+	uint8_t *patch = umem_alloc(SPA_MAXBLOCKSIZE, UMEM_NOFAIL);
+	/* patch size as a percentage of the block's allocation */
+	static const int buckets[] = { 10, 25, 50, 75, 100 };
+	uint64_t hist[5] = { 0 };
+	uint64_t patched = 0, bases = 0, rejected = 0, nocand = 0;
+	uint64_t old_asize = 0, new_asize = 0;
+	void *cookie;
+
+	avl_create(&ds.ds_seen, ddt_key_compare, sizeof (zdb_dsim_key_t),
+	    offsetof(zdb_dsim_key_t, dk_node));
+	avl_create(&ds.ds_sf, zdb_dsim_sf_compare, sizeof (zdb_dsim_sf_t),
+	    offsetof(zdb_dsim_sf_t, dsf_node));
+
+	spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
+	(void) traverse_pool(spa, 0, TRAVERSE_PRE | TRAVERSE_PREFETCH |
+	    TRAVERSE_NO_DECRYPT, zdb_dsim_cb, &ds);
+
+	for (uint64_t i = 0; i < ds.ds_nblks; i++) {
+		zdb_dsim_blk_t *db = &ds.ds_blks[i], *base = NULL;
+		arc_buf_t *tbuf, *bbuf;
+
+		if (!db->db_sketched || db->db_base)
+			continue;
+		for (int k = 0; k < ZFS_DELTA_NSF && base == NULL; k++) {
+			zdb_dsim_sf_t sfs = { .dsf_sf = db->db_sf[k] };
+			zdb_dsim_sf_t *dsf = avl_find(&ds.ds_sf, &sfs, NULL);
+			if (dsf != NULL && dsf->dsf_blk != i &&
+			    !ds.ds_blks[dsf->dsf_blk].db_patched)
+				base = &ds.ds_blks[dsf->dsf_blk];
+		}
+		if (base == NULL) {
+			nocand++;
+			continue;
+		}
+		if (zdb_dsim_read(spa, &db->db_bp, &db->db_zb, &tbuf) != 0)
+			continue;
+		if (zdb_dsim_read(spa, &base->db_bp, &base->db_zb,
+		    &bbuf) != 0) {
+			arc_buf_destroy(tbuf, &tbuf);
+			continue;
+		}
+		uint64_t lsize = BP_GET_LSIZE(&db->db_bp);
+		size_t n = zfs_delta_encode(bbuf->b_data,
+		    BP_GET_LSIZE(&base->db_bp), tbuf->b_data, lsize, patch,
+		    lsize, htab);
+		arc_buf_destroy(tbuf, &tbuf);
+		arc_buf_destroy(bbuf, &bbuf);
+		uint64_t cur = zdb_dsim_asize(spa, BP_GET_PSIZE(&db->db_bp));
+		uint64_t pasize = UINT64_MAX;
+		if (n != 0) {
+			abd_t *src = abd_get_from_buf(patch, n), *dst = NULL;
+			size_t c = zio_compress_data(ZIO_COMPRESS_LZ4, src,
+			    &dst, n, n, 0);
+			abd_free(src);
+			if (dst != NULL)
+				abd_free(dst);
+			pasize = zdb_dsim_asize(spa, c);
+		}
+		if (pasize >= cur) {
+			rejected++;
+			continue;
+		}
+		db->db_patched = B_TRUE;
+		if (!base->db_base) {
+			base->db_base = B_TRUE;
+			bases++;
+		}
+		patched++;
+		old_asize += cur;
+		new_asize += pasize;
+		for (int k = 0; k < 5; k++) {
+			if (pasize * 100 <= cur * buckets[k]) {
+				hist[k]++;
+				break;
+			}
+		}
+	}
+	spa_config_exit(spa, SCL_CONFIG, FTAG);
+
+	uint64_t saved = old_asize - new_asize;
+	(void) printf("Simulated delta blocks (patches against similar "
+	    "blocks, one level deep):\n");
+	(void) printf("\tdata blocks referenced: %llu, %llu bytes allocated\n",
+	    (u_longlong_t)ds.ds_ref_blocks, (u_longlong_t)ds.ds_ref_asize);
+	(void) printf("\tunique (exact copies once): %llu blocks, %llu bytes "
+	    "logical, %llu bytes allocated\n", (u_longlong_t)ds.ds_nblks,
+	    (u_longlong_t)ds.ds_lsize, (u_longlong_t)ds.ds_asize);
+	(void) printf("\tsketched: %llu, unreadable: %llu\n",
+	    (u_longlong_t)ds.ds_sketched, (u_longlong_t)ds.ds_unreadable);
+	(void) printf("\tpatched: %llu blocks (%.1f%% of unique), %llu -> "
+	    "%llu bytes allocated\n", (u_longlong_t)patched,
+	    ds.ds_nblks ? 100.0 * patched / ds.ds_nblks : 0.0,
+	    (u_longlong_t)old_asize, (u_longlong_t)new_asize);
+	(void) printf("\tbases: %llu blocks; no candidate: %llu; patch not "
+	    "smaller: %llu\n", (u_longlong_t)bases, (u_longlong_t)nocand,
+	    (u_longlong_t)rejected);
+	(void) printf("\tpatch / block allocation: <=10%%: %llu, <=25%%: %llu, "
+	    "<=50%%: %llu, <=75%%: %llu, <100%%: %llu\n",
+	    (u_longlong_t)hist[0], (u_longlong_t)hist[1],
+	    (u_longlong_t)hist[2], (u_longlong_t)hist[3],
+	    (u_longlong_t)hist[4]);
+	(void) printf("\tsaving: %llu bytes, %.1f%% of unique allocation "
+	    "(%llu -> %llu bytes)\n", (u_longlong_t)saved,
+	    ds.ds_asize ? 100.0 * saved / ds.ds_asize : 0.0,
+	    (u_longlong_t)ds.ds_asize, (u_longlong_t)(ds.ds_asize - saved));
+
+	cookie = NULL;
+	zdb_dsim_key_t *dk;
+	while ((dk = avl_destroy_nodes(&ds.ds_seen, &cookie)) != NULL)
+		umem_free(dk, sizeof (*dk));
+	avl_destroy(&ds.ds_seen);
+	cookie = NULL;
+	zdb_dsim_sf_t *dsf;
+	while ((dsf = avl_destroy_nodes(&ds.ds_sf, &cookie)) != NULL)
+		umem_free(dsf, sizeof (*dsf));
+	avl_destroy(&ds.ds_sf);
+	if (ds.ds_capblks != 0)
+		umem_free(ds.ds_blks, ds.ds_capblks * sizeof (zdb_dsim_blk_t));
+	umem_free(patch, SPA_MAXBLOCKSIZE);
+	umem_free(htab, ZFS_DELTA_HASH_SIZE * sizeof (uint32_t));
+}
+
 static void
 dump_simulated_ddt(spa_t *spa)
 {
@@ -9385,6 +9659,11 @@ dump_zpool(spa_t *spa)
 		return;
 	}
 
+	if (dump_opt[ARG_SIMULATE_DELTA]) {
+		dump_simulated_delta(spa);
+		return;
+	}
+
 	if (!dump_opt['e'] && dump_opt['C'] > 1) {
 		(void) printf("\nCached configuration:\n");
 		dump_nvlist(spa->spa_config, 8);
@@ -10282,6 +10561,8 @@ main(int argc, char **argv)
 		    ARG_BLOCK_BIN_MODE},
 		{"class",		required_argument,	NULL,
 		    ARG_BLOCK_CLASSES},
+		{"simulate-delta",	no_argument,		NULL,
+		    ARG_SIMULATE_DELTA},
 		{0, 0, 0, 0}
 	};
 
@@ -10314,6 +10595,7 @@ main(int argc, char **argv)
 		case 'y':
 		case 'Z':
 		case ARG_ALLOCATED:
+		case ARG_SIMULATE_DELTA:
 			dump_opt[c]++;
 			dump_all = 0;
 			break;

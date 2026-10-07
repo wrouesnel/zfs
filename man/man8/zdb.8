@@ -100,6 +100,12 @@
 .Op Fl e Oo Fl V Oc Oo Fl p Ar path Oc Ns …
 .Op Fl U Ar cache
 .Ar poolname
+.Nm
+.Fl -simulate-delta
+.Op Fl Av
+.Op Fl e Oo Fl V Oc Oo Fl p Ar path Oc Ns …
+.Op Fl U Ar cache
+.Ar poolname
 .
 .Sh DESCRIPTION
 The
@@ -454,6 +460,21 @@ Display operation counts, bandwidth, and error counts of I/O to the pool from
 Simulate the effects of deduplication, constructing a DDT and then display
 that DDT as with
 .Fl DD .
+.It Fl Sy -simulate-delta
+Estimate how much space would be saved by storing data blocks that are
+similar to another block as a patch against it, as
+.Nm zfs Cm send Fl -delta
+sends them, in addition to what deduplication and block cloning already
+share.
+Every data block is read.
+Exact copies are counted once; each remaining block that is similar to a
+block stored in full is encoded as a patch against it, compressed with LZ4
+and rounded up to the pool's sector size, and counted as saved if that is
+smaller than the block.
+Patches are one level deep: a block used as a base is not itself a patch.
+With
+.Fl v ,
+progress is reported.
 .It Fl T , -brt-stats
 Display block reference table (BRT) statistics, including the size of uniques
 blocks cloned, the space saving as a result of cloning, and the saving ratio.
