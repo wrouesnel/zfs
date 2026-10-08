@@ -42,6 +42,11 @@ if is_global_zone ; then
 fi
 log_must mkdir $BACKDIR $TESTDIR
 
+# The tests count the references in streams, so wait for zfs send --refs to
+# find them all before the stream is sent; send_refs_hybrid covers the
+# default, searching while streaming.
+log_must set_tunable32 SEND_REFS_WAIT 1
+
 log_must setup_test_model $POOL
 
 log_pass

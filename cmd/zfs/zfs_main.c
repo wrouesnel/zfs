@@ -141,7 +141,8 @@ static int zfs_do_help(int argc, char **argv);
 enum zfs_options {
 	ZFS_OPTION_JSON_NUMS_AS_INT = 1024,
 	ZFS_OPTION_SEND_REFS,
-	ZFS_OPTION_SEND_DELTA
+	ZFS_OPTION_SEND_DELTA,
+	ZFS_OPTION_SEND_REFS_RESOLVE
 };
 
 /*
@@ -349,14 +350,17 @@ get_usage(zfs_help_t idx)
 		return (gettext("\trollback [-rRf] <snapshot>\n"));
 	case HELP_SEND:
 		return (gettext("\tsend [-DLPbcehnpsVvw] [--refs] [--delta] "
-		    "[-i|-I snapshot]\n"
-		    "\t     [-R [-X dataset[,dataset]...]]     <snapshot>\n"
+		    "[--refs-resolve=pct]\n"
+		    "\t     [-i|-I snapshot] [-R [-X dataset[,dataset]...]] "
+		    "<snapshot>\n"
 		    "\tsend [-DnVvPLecw] [--refs] [--delta] "
-		    "[-i snapshot|bookmark]\n"
-		    "\t     <filesystem|volume|snapshot>\n"
+		    "[--refs-resolve=pct]\n"
+		    "\t     [-i snapshot|bookmark] "
+		    "<filesystem|volume|snapshot>\n"
 		    "\tsend [-DnPpVvLec] [-i bookmark|snapshot] "
 		    "--redact <bookmark> <snapshot>\n"
-		    "\tsend [-nVvPe] -t <receive_resume_token>\n"
+		    "\tsend [-nVvPe] [--refs-resolve=pct] "
+		    "-t <receive_resume_token>\n"
 		    "\tsend [-PnVv] --saved filesystem\n"));
 	case HELP_SET:
 		return (gettext("\tset [-u] <property=value> ... "
@@ -4790,6 +4794,8 @@ zfs_do_send(int argc, char **argv)
 		{"exclude",	required_argument,	NULL, 'X'},
 		{"refs",	no_argument,	NULL, ZFS_OPTION_SEND_REFS},
 		{"delta",	no_argument,	NULL, ZFS_OPTION_SEND_DELTA},
+		{"refs-resolve", required_argument, NULL,
+		    ZFS_OPTION_SEND_REFS_RESOLVE},
 		{0, 0, 0, 0}
 	};
 
@@ -4886,6 +4892,23 @@ zfs_do_send(int argc, char **argv)
 		case ZFS_OPTION_SEND_DELTA:
 			flags.delta = B_TRUE;
 			break;
+		case ZFS_OPTION_SEND_REFS_RESOLVE: {
+			char *end;
+			unsigned long pct;
+
+			errno = 0;
+			pct = strtoul(optarg, &end, 10);
+			if (errno != 0 || *optarg == '\0' || *end != '\0' ||
+			    pct < 1 || pct > 100) {
+				(void) fprintf(stderr, gettext("invalid "
+				    "--refs-resolve percentage '%s': must be "
+				    "from 1 to 100\n"), optarg);
+				free(excludes.list);
+				usage(B_FALSE);
+			}
+			flags.refs_resolve_pct = (unsigned int)pct;
+			break;
+		}
 		case ':':
 			/*
 			 * If a parameter was not passed, optopt contains the
@@ -4996,6 +5019,14 @@ zfs_do_send(int argc, char **argv)
 		free(excludes.list);
 		(void) fprintf(stderr,
 		    gettext("Error: raw sends may not be redacted.\n"));
+		return (1);
+	}
+
+	if (flags.refs_resolve_pct != 0 && !flags.refs &&
+	    resume_token == NULL) {
+		free(excludes.list);
+		(void) fprintf(stderr, gettext("Error: --refs-resolve "
+		    "requires --refs.\n"));
 		return (1);
 	}
 

@@ -31,7 +31,7 @@
 .\" Copyright 2019 Joyent, Inc.
 .\" Copyright (c) 2024, Klara, Inc.
 .\"
-.Dd October 1, 2026
+.Dd October 9, 2026
 .Dt ZFS-SEND 8
 .Os
 .
@@ -44,6 +44,7 @@
 .Op Fl DLPVbcehnpsvw
 .Op Fl -refs
 .Op Fl -delta
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -52,6 +53,7 @@
 .Op Fl DLPVcensvw
 .Op Fl -refs
 .Op Fl -delta
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Nm zfs
@@ -63,6 +65,7 @@
 .Nm zfs
 .Cm send
 .Op Fl PVenv
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Fl t
 .Ar receive_resume_token
 .Nm zfs
@@ -82,6 +85,7 @@
 .Op Fl DLPVbcehnpsvw
 .Op Fl -refs
 .Op Fl -delta
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Op Fl R Op Fl X Ar dataset Ns Oo , Ns Ar dataset Oc Ns …
 .Op Oo Fl I Ns | Ns Fl i Oc Ar snapshot
 .Ar snapshot
@@ -312,6 +316,16 @@ May be combined with
 .Fl -refs .
 See
 .Sx Fromsnap References .
+.It Fl -refs-resolve Ns = Ns Ar pct
+With
+.Fl -refs ,
+stop searching the incremental source for the blocks to reference once
+.Ar pct
+percent of the data of the changed blocks that use them, by logical size, can be
+sent as references, and send the rest in full.
+The default is 100.
+See
+.Sx Fromsnap References .
 .It Fl s , -skip-missing
 Allows sending a replication stream even when there are snapshots missing in the
 hierarchy.
@@ -340,6 +354,7 @@ You will be able to receive your streams on future versions of ZFS.
 .Op Fl DLPVcenvw
 .Op Fl -refs
 .Op Fl -delta
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Op Fl i Ar snapshot Ns | Ns Ar bookmark
 .Ar filesystem Ns | Ns Ar volume Ns | Ns Ar snapshot
 .Xc
@@ -467,6 +482,16 @@ May be combined with
 .Fl -refs .
 See
 .Sx Fromsnap References .
+.It Fl -refs-resolve Ns = Ns Ar pct
+With
+.Fl -refs ,
+stop searching the incremental source for the blocks to reference once
+.Ar pct
+percent of the data of the changed blocks that use them, by logical size, can be
+sent as references, and send the rest in full.
+The default is 100.
+See
+.Sx Fromsnap References .
 .It Fl n , -dryrun
 Do a dry-run
 .Pq Qq No-op
@@ -590,6 +615,7 @@ raw sends and redacted sends cannot be combined at this time.
 .Nm zfs
 .Cm send
 .Op Fl PVenv
+.Op Fl -refs-resolve Ns = Ns Ar pct
 .Fl t
 .Ar receive_resume_token
 .Xc
@@ -661,10 +687,35 @@ from its copy of the source and writes it.
 The data never crosses the wire in either case.
 .Pp
 Before the stream starts, the sending system scans the block pointers of the
-changed blocks and of the source to find the references; no file data is read.
+changed blocks to find the blocks they share with older data; no file data is
+read.
+When a send is resumed, only the changes from the resume point on are scanned.
 The number of blocks tracked per send is limited by
 .Sy zfs_send_refs_max_blocks ;
 blocks beyond it are sent in full.
+.Pp
+It then searches the block pointers of the source for where those blocks are,
+which can take much longer than finding the changed blocks: the time depends on
+the size of the source, not of the changes.
+The stream is sent meanwhile, and a block that the stream reaches before it has
+been found is sent in full; set
+.Sy zfs_send_refs_wait
+to wait for the search to end before sending the stream instead.
+The search ends early once every block has been found, but if some cannot be
+found, for example blocks that deduplication shares with another dataset, all
+of the source is searched, unless the stream ends first.
+With
+.Fl -refs-resolve Ns = Ns Ar pct ,
+it ends as soon as
+.Ar pct
+percent of the data of the changed blocks that use the referenced blocks, by
+logical size, can be sent as references; the others are sent in full.
+How much time that saves depends on where in the source the referenced blocks
+are.
+The progress of the search, and how much of the source it covered, is logged
+to the
+.Sy dbgmsg
+kstat.
 The size estimate of
 .Fl n
 does not account for references.

@@ -18,7 +18,7 @@
 .\" own identifying information:
 .\" Portions Copyright [yyyy] [name of copyright owner]
 .\"
-.Dd October 1, 2026
+.Dd October 9, 2026
 .Dt ZFS 4
 .Os
 .
@@ -2266,6 +2266,19 @@ Blocks beyond this limit are sent in full, and the
 counter of the
 .Sy send_refs
 kstat is incremented.
+.
+.It Sy zfs_send_refs_wait Ns = Ns Sy 0 Ns | Ns 1 Pq uint
+By default,
+.Nm zfs Cm send Fl -refs
+sends the stream while it searches the incremental source for the blocks to
+reference, and sends the blocks that the stream reaches before they are found
+in full; the
+.Sy send_refs_missed
+counter of the
+.Sy send_refs
+kstat counts them.
+When set, the stream is only sent once the search has ended, so that every
+block that is found is sent as a reference.
 .
 .It Sy zfs_send_unmodified_spill_blocks Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Include unmodified spill blocks in the send stream.

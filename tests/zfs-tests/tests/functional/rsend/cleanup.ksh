@@ -44,5 +44,6 @@ else
 	poolexists $POOL3 && cleanup_pool $POOL3
 fi
 log_must rm -rf $BACKDIR $TESTDIR
+log_must set_tunable32 SEND_REFS_WAIT 0
 
 log_pass

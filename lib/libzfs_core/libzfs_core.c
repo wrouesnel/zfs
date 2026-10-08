@@ -848,7 +848,7 @@ lzc_send_resume(const char *snapname, const char *from, int fd,
 static int
 lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
     enum lzc_send_flags flags, uint64_t resumeobj, uint64_t resumeoff,
-    const char *redactbook)
+    const char *redactbook, unsigned int refs_resolve_pct)
 {
 	nvlist_t *args;
 	int err;
@@ -871,6 +871,8 @@ lzc_send_resume_redacted_cb_impl(const char *snapname, const char *from, int fd,
 		fnvlist_add_boolean(args, "refsok");
 	if (flags & LZC_SEND_FLAG_DELTA)
 		fnvlist_add_boolean(args, "deltaok");
+	if (refs_resolve_pct != 0)
+		fnvlist_add_uint64(args, "refs_resolve_pct", refs_resolve_pct);
 	if (resumeobj != 0 || resumeoff != 0) {
 		fnvlist_add_uint64(args, "resume_object", resumeobj);
 		fnvlist_add_uint64(args, "resume_offset", resumeoff);
@@ -890,6 +892,7 @@ struct lzc_send_resume_redacted {
 	uint64_t resumeobj;
 	uint64_t resumeoff;
 	const char *redactbook;
+	unsigned int refs_resolve_pct;
 };
 
 static int
@@ -898,13 +901,28 @@ lzc_send_resume_redacted_cb(int fd, void *arg)
 	struct lzc_send_resume_redacted *zsrr = arg;
 	return (lzc_send_resume_redacted_cb_impl(zsrr->snapname, zsrr->from,
 	    fd, zsrr->flags, zsrr->resumeobj, zsrr->resumeoff,
-	    zsrr->redactbook));
+	    zsrr->redactbook, zsrr->refs_resolve_pct));
 }
 
 int
 lzc_send_resume_redacted(const char *snapname, const char *from, int fd,
     enum lzc_send_flags flags, uint64_t resumeobj, uint64_t resumeoff,
     const char *redactbook)
+{
+	return (lzc_send_resume_redacted_refs(snapname, from, fd, flags,
+	    resumeobj, resumeoff, redactbook, 0));
+}
+
+/*
+ * As lzc_send_resume_redacted(), and with LZC_SEND_FLAG_REFS, stop
+ * searching the incremental source for the blocks to reference once
+ * refs_resolve_pct percent (1-100) of the data of the changed blocks that
+ * use them can be sent as references.  0 leaves it to the kernel (100).
+ */
+int
+lzc_send_resume_redacted_refs(const char *snapname, const char *from, int fd,
+    enum lzc_send_flags flags, uint64_t resumeobj, uint64_t resumeoff,
+    const char *redactbook, unsigned int refs_resolve_pct)
 {
 	struct lzc_send_resume_redacted zsrr = {
 		.snapname = snapname,
@@ -913,6 +931,7 @@ lzc_send_resume_redacted(const char *snapname, const char *from, int fd,
 		.resumeobj = resumeobj,
 		.resumeoff = resumeoff,
 		.redactbook = redactbook,
+		.refs_resolve_pct = refs_resolve_pct,
 	};
 	return (lzc_send_wrapper(lzc_send_resume_redacted_cb, fd, &zsrr));
 }

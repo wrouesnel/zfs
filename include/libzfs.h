@@ -851,6 +851,13 @@ typedef struct sendflags {
 
 	/* patch blocks similar to ones in the incremental source (--delta) */
 	boolean_t delta;
+
+	/*
+	 * with refs, stop searching the incremental source once this
+	 * percentage of the data to reference is found (--refs-resolve);
+	 * 0 for the default (100)
+	 */
+	unsigned int refs_resolve_pct;
 } sendflags_t;
 
 typedef boolean_t (snapfilter_cb_t)(zfs_handle_t *, void *);

@@ -738,6 +738,7 @@ typedef struct send_dump_data {
 	boolean_t seenfrom, seento, replicate, doall, fromorigin;
 	boolean_t dryrun, parsable, progress, embed_data, std_out;
 	boolean_t large_block, compress, raw, holds, refs, delta;
+	unsigned int refs_resolve_pct;
 	boolean_t progressastitle;
 	int outfd;
 	boolean_t err;
@@ -810,7 +811,7 @@ zfs_send_space(zfs_handle_t *zhp, const char *snapname, const char *from,
 static int
 dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
     boolean_t fromorigin, int outfd, enum lzc_send_flags flags,
-    nvlist_t *debugnv)
+    unsigned int refs_resolve_pct, nvlist_t *debugnv)
 {
 	zfs_cmd_t zc = {"\0"};
 	libzfs_handle_t *hdl = zhp->zfs_hdl;
@@ -844,7 +845,8 @@ dump_ioctl(zfs_handle_t *zhp, const char *fromsnap, uint64_t fromsnap_obj,
 		(void) strlcpy(fromname, zhp->zfs_name, sizeof (fromname));
 		*(strchr(fromname, '@') + 1) = '\0';
 		(void) strlcat(fromname, fromsnap, sizeof (fromname));
-		error = lzc_send(zhp->zfs_name, fromname, outfd, flags);
+		error = lzc_send_resume_redacted_refs(zhp->zfs_name, fromname,
+		    outfd, flags, 0, 0, NULL, refs_resolve_pct);
 	} else if (zfs_ioctl(zhp->zfs_hdl, ZFS_IOC_SEND, &zc) != 0) {
 		error = errno;
 	}
@@ -1387,7 +1389,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 		}
 
 		err = dump_ioctl(zhp, sdd->prevsnap, sdd->prevsnap_obj,
-		    fromorigin, sdd->outfd, flags, sdd->debugnv);
+		    fromorigin, sdd->outfd, flags, sdd->refs_resolve_pct,
+		    sdd->debugnv);
 
 		if (send_progress_thread_exit(zhp->zfs_hdl, tid, &oldmask))
 			return (-1);
@@ -2080,8 +2083,9 @@ zfs_send_resume_impl_cb_impl(libzfs_handle_t *hdl, sendflags_t *flags,
 			SEND_PROGRESS_THREAD_PARENT_BLOCK(&oldmask);
 		}
 
-		error = lzc_send_resume_redacted(zhp->zfs_name, fromname, outfd,
-		    lzc_flags, resumeobj, resumeoff, redact_book);
+		error = lzc_send_resume_redacted_refs(zhp->zfs_name, fromname,
+		    outfd, lzc_flags, resumeobj, resumeoff, redact_book,
+		    flags->refs_resolve_pct);
 		if (redact_book != NULL)
 			free(redact_book);
 
@@ -2531,6 +2535,7 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 	sdd.dryrun = flags->dryrun;
 	sdd.large_block = flags->largeblock;
 	sdd.refs = flags->refs;
+	sdd.refs_resolve_pct = flags->refs_resolve_pct;
 	sdd.delta = flags->delta;
 	sdd.embed_data = flags->embed_data;
 	sdd.compress = flags->compress;
@@ -2897,8 +2902,9 @@ zfs_send_one_cb_impl(zfs_handle_t *zhp, const char *from, int fd,
 		SEND_PROGRESS_THREAD_PARENT_BLOCK(&oldmask);
 	}
 
-	err = lzc_send_redacted(name, from, fd,
-	    lzc_flags_from_sendflags(flags), redactbook);
+	err = lzc_send_resume_redacted_refs(name, from, fd,
+	    lzc_flags_from_sendflags(flags), 0, 0, redactbook,
+	    flags->refs_resolve_pct);
 
 	if (send_progress_thread_exit(hdl, ptid, &oldmask))
 			return (-1);

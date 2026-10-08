@@ -52,7 +52,8 @@ int
 dmu_send(const char *tosnap, const char *fromsnap, boolean_t embedok,
     boolean_t large_block_ok, boolean_t compressok, boolean_t rawok,
     boolean_t savedok, boolean_t refsok, boolean_t deltaok,
-    uint64_t resumeobj, uint64_t resumeoff, const char *redactbook, int outfd,
+    uint_t refs_resolve_pct, uint64_t resumeobj, uint64_t resumeoff,
+    const char *redactbook, int outfd,
     offset_t *off, struct dmu_send_outparams *dsop);
 int dmu_send_estimate_fast(struct dsl_dataset *ds, struct dsl_dataset *fromds,
     zfs_bookmark_phys_t *frombook, boolean_t stream_compressed,
@@ -73,6 +74,16 @@ typedef struct send_refs_stats {
 	kstat_named_t	send_refs_truncated;
 	kstat_named_t	send_refs_records;
 	kstat_named_t	send_refs_bytes;
+	kstat_named_t	send_refs_uses;
+	kstat_named_t	send_refs_uses_resolved;
+	kstat_named_t	send_refs_use_bytes;
+	kstat_named_t	send_refs_use_bytes_resolved;
+	kstat_named_t	send_refs_resolve_stopped;
+	kstat_named_t	send_refs_background;
+	kstat_named_t	send_refs_missed;
+	kstat_named_t	send_refs_missed_bytes;
+	kstat_named_t	send_refs_src_ahead;
+	kstat_named_t	send_refs_src_ahead_bytes;
 	kstat_named_t	recv_refs_cloned;
 	kstat_named_t	recv_refs_copied;
 	kstat_named_t	send_delta_attempts;
