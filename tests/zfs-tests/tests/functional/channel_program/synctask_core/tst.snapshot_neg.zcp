@@ -18,6 +18,7 @@ args = ...
 argv = args["argv"]
 fs1 = argv[1]
 fs2 = argv[2]
+pool = string.match(fs1, "^[^/]+")
 
 longstring = "a"
 for i=1,9 do
@@ -28,6 +29,23 @@ end
 assert(zfs.sync.snapshot("ceci_nest_pas_une_dataset") == EINVAL);
 assert(zfs.sync.snapshot(fs1) == EINVAL)
 assert(zfs.sync.snapshot(fs1 .. "@" .. longstring) == ENAMETOOLONG)
+-- empty or invalid snapshot names must be rejected, as zfs(8) does
+assert(zfs.sync.snapshot(fs1 .. "@") == EINVAL)
+assert(zfs.sync.snapshot(fs1 .. "@bad%name") == EINVAL)
+assert(zfs.sync.snapshot(fs1 .. "@bad@name") == EINVAL)
+assert(zfs.sync.snapshot(fs1 .. "@bad/name") == EINVAL)
+-- snapshots must be in this pool
+assert(zfs.sync.snapshot(pool .. "x/fs@snap") == EXDEV)
+assert(zfs.sync.snapshot("ceci_nest_pas_une_pool@snap") == EXDEV)
+-- rename_snapshot checks the new and the old name
+assert(zfs.sync.rename_snapshot(fs1, "snap1", "") == EINVAL)
+assert(zfs.sync.rename_snapshot(fs1, "snap1", "bad%name") == EINVAL)
+assert(zfs.sync.rename_snapshot(fs1, "snap1", "bad@name") == EINVAL)
+assert(zfs.sync.rename_snapshot(fs1, "snap1", longstring) == ENAMETOOLONG)
+assert(zfs.sync.rename_snapshot(fs1, "", "snap2") == EINVAL)
+assert(zfs.sync.rename_snapshot(fs1, "bad%name", "snap2") == EINVAL)
+assert(zfs.sync.rename_snapshot(fs1 .. "@snap1", "snap1", "snap2") == EINVAL)
+assert(zfs.sync.rename_snapshot(pool .. "x/fs", "snap1", "snap2") == EXDEV)
 
 assert(zfs.sync.snapshot(fs2 .. "@snap1") == 0)
 -- only one snapshot of a filesystem is allowed per TXG.

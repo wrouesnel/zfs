@@ -42,5 +42,10 @@ log_must zfs snapshot $fs1@snap1
 log_must_program_sync $TESTPOOL \
     $ZCP_ROOT/synctask_core/tst.snapshot_neg.zcp $fs1 $fs2
 
+# Only the snapshots the program was allowed to create may exist.
+snaps=$(zfs list -H -o name -t snapshot -r $fs1 $fs2 | sort | xargs)
+[[ "$snaps" == "$fs1@snap1 $fs2@snap1" ]] || \
+    log_fail "unexpected snapshots: $snaps"
+
 log_pass "zfs.sync.snapshot returns correct errors on invalid input"
 
