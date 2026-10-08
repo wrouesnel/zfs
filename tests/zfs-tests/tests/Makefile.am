@@ -1756,6 +1756,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/gang_blocks/gang_blocks_ddt_copies.ksh \
 	functional/gang_blocks/gang_blocks_redundant.ksh \
 	functional/gang_blocks/gang_blocks_dyn_header_neg.ksh \
+	functional/gang_blocks/gang_blocks_dyn_header_import.ksh \
 	functional/gang_blocks/gang_blocks_dyn_header_pos.ksh \
 	functional/gang_blocks/gang_blocks_dyn_multi.ksh \
 	functional/gang_blocks/setup.ksh \
