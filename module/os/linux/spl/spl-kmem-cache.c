@@ -33,6 +33,7 @@
 #include <linux/slab.h>
 #include <linux/swap.h>
 #include <linux/prefetch.h>
+#include <linux/rcupdate.h>
 
 /*
  * Linux 3.16 replaced smp_mb__{before,after}_{atomic,clear}_{dec,inc,bit}()
@@ -826,6 +827,17 @@ spl_kmem_cache_destroy(spl_kmem_cache_t *skc)
 	down_write(&spl_kmem_cache_sem);
 	list_del_init(&skc->skc_list);
 	up_write(&spl_kmem_cache_sem);
+
+	/*
+	 * Objects may still be on their way back through RCU callbacks,
+	 * such as znodes, which the kernel frees with call_rcu() through
+	 * super_operations->free_inode after an unmount. Wait for them
+	 * while the cache still takes frees, and before the module that
+	 * owns the callbacks can go away.
+	 */
+	if (skc->skc_obj_alloc != 0 ||
+	    percpu_counter_sum(&skc->skc_linux_alloc) != 0)
+		rcu_barrier();
 
 	/* Cancel any and wait for any pending delayed tasks */
 	VERIFY(!test_and_set_bit(KMC_BIT_DESTROY, &skc->skc_flags));
