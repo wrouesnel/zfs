@@ -37,6 +37,7 @@ function cleanup
 	log_must set_tunable64 DMU_OFFSET_NEXT_SYNC $dmu_offset_next_sync
 }
 
+# (changed-tests demo)
 log_assert "lseek() data/holes for an mmap()'d file."
 
 log_onexit cleanup

@@ -28,6 +28,7 @@
 # 3. Verify the filesystem is intact and not hung in any way
 #
 
+# (changed-tests demo)
 verify_runnable "global"
 
 log_assert "verify mmap'd pages work with libaio"
