@@ -106,6 +106,12 @@
 .Op Fl e Oo Fl V Oc Oo Fl p Ar path Oc Ns …
 .Op Fl U Ar cache
 .Ar poolname
+.Nm
+.Fl -simulate-refmap
+.Op Fl Av
+.Op Fl e Oo Fl V Oc Oo Fl p Ar path Oc Ns …
+.Op Fl U Ar cache
+.Ar poolname
 .
 .Sh DESCRIPTION
 The
@@ -474,6 +480,21 @@ smaller than the block.
 Patches are one level deep: a block used as a base is not itself a patch.
 With
 .Fl v ,
+progress is reported.
+.It Fl Sy -simulate-refmap
+Estimate the size of a map recording where each reference to a
+deduplicated or cloned block is (dataset, object and block), which would let
+.Nm zfs Cm send Fl -refs
+look up where the incremental source references a block instead of
+searching the source for it.
+The counts come from the DDT and BRT, and the estimate is compared to the
+size of the DDT.
+With
+.Fl v ,
+the block pointers are also walked, without reading data, to count runs of
+consecutive blocks of one file (for a map with one entry per run) and the
+block pointers a backfill of the pool would walk; with
+.Fl vv ,
 progress is reported.
 .It Fl T , -brt-stats
 Display block reference table (BRT) statistics, including the size of uniques

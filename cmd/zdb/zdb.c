@@ -107,6 +107,7 @@ enum {
 	ARG_BLOCK_BIN_MODE,
 	ARG_BLOCK_CLASSES,
 	ARG_SIMULATE_DELTA,
+	ARG_SIMULATE_REFMAP,
 };
 
 static const char cmdname[] = "zdb";
@@ -815,6 +816,8 @@ usage(void)
 	    "simulate dedup to measure effect\n");
 	(void) fprintf(stderr, "        --simulate-delta             "
 	    "estimate the effect of storing similar blocks as patches\n");
+	(void) fprintf(stderr, "        --simulate-refmap            "
+	    "estimate a map from shared blocks to their locations\n");
 	(void) fprintf(stderr, "        -v --verbose                 "
 	    "verbose (applies to all others)\n");
 	(void) fprintf(stderr, "        -y --livelist                "
@@ -8693,6 +8696,152 @@ dump_simulated_delta(spa_t *spa)
 	umem_free(htab, ZFS_DELTA_HASH_SIZE * sizeof (uint32_t));
 }
 
+/*
+ * --simulate-refmap: estimate the cost of recording, for every reference
+ * to a deduplicated or cloned block, where it is (dataset, object, block),
+ * so that zfs send --refs can look up where the incremental source
+ * references a block instead of searching the source for it.
+ *
+ * The counts come from the DDT and BRT, so this is quick on any pool.
+ * With -v the block pointers are also walked (no data is read) to count
+ * runs of consecutive blocks of one file among them: a map storing one
+ * entry per run instead of per block, and the number of block pointers a
+ * one-off backfill of an existing pool would walk.
+ */
+#define	REFMAP_LOC_BYTES	24	/* dataset, object, block id */
+#define	REFMAP_RUN_BYTES	32	/* the same and a run length */
+#define	REFMAP_OVERHEAD_PCT	150	/* B-tree/ZAP storage, estimated */
+
+typedef struct zdb_refmap {
+	uint64_t	rm_bps;		/* data block pointers walked */
+	uint64_t	rm_mapped;	/* of which dedup or cloned */
+	uint64_t	rm_runs;
+	uint64_t	rm_objset;
+	uint64_t	rm_object;
+	uint64_t	rm_blkid;
+	boolean_t	rm_in_run;
+} zdb_refmap_t;
+
+static int
+zdb_refmap_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
+    const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
+{
+	(void) zilog, (void) dnp;
+	zdb_refmap_t *rm = arg;
+
+	if (bp == NULL || zb->zb_level != 0 || BP_IS_HOLE(bp) ||
+	    BP_IS_EMBEDDED(bp) || BP_IS_REDACTED(bp) ||
+	    DMU_OT_IS_METADATA(BP_GET_TYPE(bp)))
+		return (0);
+
+	rm->rm_bps++;
+	if (!BP_GET_DEDUP(bp) && !brt_maybe_exists(spa, bp)) {
+		rm->rm_in_run = B_FALSE;
+		return (0);
+	}
+	rm->rm_mapped++;
+	if (!rm->rm_in_run || zb->zb_objset != rm->rm_objset ||
+	    zb->zb_object != rm->rm_object || zb->zb_blkid != rm->rm_blkid + 1)
+		rm->rm_runs++;
+	rm->rm_in_run = B_TRUE;
+	rm->rm_objset = zb->zb_objset;
+	rm->rm_object = zb->zb_object;
+	rm->rm_blkid = zb->zb_blkid;
+	if (dump_opt[ARG_SIMULATE_REFMAP] > 2 && rm->rm_bps % 10000000 == 0)
+		(void) printf("walked %llu block pointers\n",
+		    (u_longlong_t)rm->rm_bps);
+	return (0);
+}
+
+static void
+dump_refmap_size(const char *what, uint64_t entries, uint64_t entbytes,
+    uint64_t ddt_disk)
+{
+	char raw[32], est[32];
+	uint64_t bytes = entries * entbytes;
+
+	zdb_nicebytes(bytes, raw, sizeof (raw));
+	zdb_nicebytes(bytes * REFMAP_OVERHEAD_PCT / 100, est, sizeof (est));
+	(void) printf("\t%s: %llu entries x %llu bytes = %s raw, ~%s stored",
+	    what, (u_longlong_t)entries, (u_longlong_t)entbytes, raw, est);
+	if (ddt_disk != 0)
+		(void) printf(" (%.0f%% of the DDT)", 100.0 * bytes *
+		    REFMAP_OVERHEAD_PCT / 100 / ddt_disk);
+	(void) printf("\n");
+}
+
+static void
+dump_simulated_refmap(spa_t *spa)
+{
+	ddt_histogram_t ddh = {{{0}}};
+	ddt_stat_t dds = {0};
+	ddt_object_t ddo = {0};
+	uint64_t brt_entries = 0, brt_clones = 0;
+	char b1[32], b2[32];
+
+	ddt_get_dedup_histogram(spa, &ddh);
+	ddt_histogram_total(&dds, &ddh);
+	ddt_get_dedup_object_stats(spa, &ddo);
+	uint64_t ddt_disk = ddo.ddo_dspace;
+	uint64_t ddt_core = ddo.ddo_mspace;
+
+	if (spa_feature_is_active(spa, SPA_FEATURE_BLOCK_CLONING)) {
+		for (uint64_t v = 0; v < spa->spa_brt_nvdevs; v++) {
+			brt_vdev_t *brtvd = spa->spa_brt_vdevs[v];
+			uint64_t n = 0;
+
+			if (!brtvd->bv_initiated)
+				continue;
+			if (zap_count(spa->spa_meta_objset,
+			    brtvd->bv_mos_entries, &n) == 0)
+				brt_entries += n;
+			brt_clones += brtvd->bv_totalcount;
+		}
+	}
+
+	(void) printf("Simulated reference location map (where each "
+	    "reference to a shared block is):\n");
+	zdb_nicebytes(ddt_disk, b1, sizeof (b1));
+	zdb_nicebytes(ddt_core, b2, sizeof (b2));
+	(void) printf("\tDDT: %llu unique blocks, %llu references "
+	    "(average %llu bytes logical); %s on disk, %s in core\n",
+	    (u_longlong_t)dds.dds_blocks, (u_longlong_t)dds.dds_ref_blocks,
+	    (u_longlong_t)(dds.dds_ref_blocks ?
+	    dds.dds_ref_lsize / dds.dds_ref_blocks : 0), b1, b2);
+	(void) printf("\tBRT: %llu cloned blocks, %llu clone references\n",
+	    (u_longlong_t)brt_entries, (u_longlong_t)brt_clones);
+
+	/* Every reference to a block in the DDT or BRT gets a location. */
+	uint64_t locations = dds.dds_ref_blocks + brt_entries + brt_clones;
+	dump_refmap_size("one location per reference", locations,
+	    REFMAP_LOC_BYTES, ddt_disk);
+
+	if (dump_opt[ARG_SIMULATE_REFMAP] < 2) {
+		(void) printf("\t(use -v to walk the block pointers for runs "
+		    "of consecutive blocks and the backfill size)\n");
+		return;
+	}
+
+	zdb_refmap_t rm = { 0 };
+	hrtime_t start = gethrtime();
+	spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
+	(void) traverse_pool(spa, 0, TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA |
+	    TRAVERSE_NO_DECRYPT, zdb_refmap_cb, &rm);
+	spa_config_exit(spa, SCL_CONFIG, FTAG);
+
+	(void) printf("\twalked %llu data block pointers in %llu s; %llu are "
+	    "deduplicated or (possibly) cloned\n", (u_longlong_t)rm.rm_bps,
+	    (u_longlong_t)NSEC2SEC(gethrtime() - start),
+	    (u_longlong_t)rm.rm_mapped);
+	(void) printf("\truns of consecutive blocks of one file among them: "
+	    "%llu (average %.1f blocks)\n", (u_longlong_t)rm.rm_runs,
+	    rm.rm_runs ? (double)rm.rm_mapped / rm.rm_runs : 0.0);
+	dump_refmap_size("one entry per run", rm.rm_runs, REFMAP_RUN_BYTES,
+	    ddt_disk);
+	(void) printf("\tbackfill: walk of %llu data block pointers (as "
+	    "above), no data read\n", (u_longlong_t)rm.rm_bps);
+}
+
 static void
 dump_simulated_ddt(spa_t *spa)
 {
@@ -9664,6 +9813,11 @@ dump_zpool(spa_t *spa)
 		return;
 	}
 
+	if (dump_opt[ARG_SIMULATE_REFMAP]) {
+		dump_simulated_refmap(spa);
+		return;
+	}
+
 	if (!dump_opt['e'] && dump_opt['C'] > 1) {
 		(void) printf("\nCached configuration:\n");
 		dump_nvlist(spa->spa_config, 8);
@@ -10563,6 +10717,8 @@ main(int argc, char **argv)
 		    ARG_BLOCK_CLASSES},
 		{"simulate-delta",	no_argument,		NULL,
 		    ARG_SIMULATE_DELTA},
+		{"simulate-refmap",	no_argument,		NULL,
+		    ARG_SIMULATE_REFMAP},
 		{0, 0, 0, 0}
 	};
 
@@ -10596,6 +10752,7 @@ main(int argc, char **argv)
 		case 'Z':
 		case ARG_ALLOCATED:
 		case ARG_SIMULATE_DELTA:
+		case ARG_SIMULATE_REFMAP:
 			dump_opt[c]++;
 			dump_all = 0;
 			break;
@@ -10804,6 +10961,11 @@ main(int argc, char **argv)
 		if (dump_opt[c])
 			dump_opt[c] += verbose;
 	}
+	/* -v also applies to these long options */
+	if (dump_opt[ARG_SIMULATE_DELTA])
+		dump_opt[ARG_SIMULATE_DELTA] += verbose;
+	if (dump_opt[ARG_SIMULATE_REFMAP])
+		dump_opt[ARG_SIMULATE_REFMAP] += verbose;
 
 	argc -= optind;
 	argv += optind;
