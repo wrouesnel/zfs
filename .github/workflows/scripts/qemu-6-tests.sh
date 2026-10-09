@@ -5,7 +5,10 @@
 #
 # called on runner:  qemu-6-tests.sh
 # called on qemu-vm: qemu-6-tests.sh $OS $2 $3 [--lustre|--builtin] [quick|default]
+#                    [--tests=TEST,...]
 #
+# --tests: run only these tests (a PR that only changes them), see
+#          changed-tests.py; the runner passes $ZTS_TESTS
 # --lustre: Test build lustre in addition to the normal tests
 # --builtin: Test build ZFS as a kernel built-in in addition to the normal tests
 ######################################################################
@@ -110,6 +113,8 @@ if [ -z ${1:-} ]; then
   source env.txt
   SSH=$(which ssh)
   TESTS='$HOME/zfs/.github/workflows/scripts/qemu-6-tests.sh'
+  ZTS_TESTS=${ZTS_TESTS:-}
+  only=${ZTS_TESTS:+--tests=${ZTS_TESTS// /,}}
   date "+%s" > /tmp/tsstart
 
   for ((i=1; i<=VMs; i++)); do
@@ -132,7 +137,7 @@ if [ -z ${1:-} ]; then
     fi
 
     daemonize -c /var/tmp -p vm${i}.pid -o vm${i}log.txt -- \
-      $SSH zfs@$IP $TESTS $OS $i $VMs $extra $CI_TYPE
+      $SSH zfs@$IP $TESTS $OS $i $VMs $extra $CI_TYPE $only
     # handly line by line and add info prefix
     stdbuf -oL tail -fq vm${i}log.txt \
       | while read -r line; do prefix "$i" "$line" "$VMs"; done &
@@ -180,6 +185,11 @@ fi
 
 if [ "$1" == "quick" ] ; then
   export RUNFILES="sanity.run"
+fi
+
+ONLY_TESTS=""
+if [[ "${2:-}" == --tests=* ]] ; then
+  ONLY_TESTS="${2#--tests=}"
 fi
 
 export PATH="$PATH:/bin:/sbin:/usr/bin:/usr/sbin:/usr/local/sbin:/usr/local/bin"
@@ -252,7 +262,23 @@ sudo dmesg -c > dmesg-prerun.txt
 mount > mount.txt
 df -h > df-prerun.txt
 RV=0
-$TDIR/zfs-tests.sh -vKO -s 3GB -T $TAGS || RV=$?
+if [ -n "$ONLY_TESTS" ] ; then
+  # Runfiles with only the changed tests, in their groups (setup, cleanup,
+  # tags and timeouts as in the full suite).
+  # shellcheck disable=SC2086
+  RUNFILES=$(python3 $HOME/zfs/.github/workflows/scripts/changed-tests.py \
+    runfile $TDIR/runfiles /var/tmp \
+    "common.run,$(uname | tr '[:upper:]' '[:lower:]').run" \
+    ${ONLY_TESTS//,/ })
+  if [ -n "$RUNFILES" ] ; then
+    export RUNFILES
+    $TDIR/zfs-tests.sh -vKO -s 3GB || RV=$?
+  else
+    echo "None of the changed tests run on $OS: $ONLY_TESTS"
+  fi
+else
+  $TDIR/zfs-tests.sh -vKO -s 3GB -T $TAGS || RV=$?
+fi
 
 df -h > df-postrun.txt
 echo $RV > tests-exitcode.txt

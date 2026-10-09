@@ -70,6 +70,19 @@ can also alter the selection. The `workflow_dispatch` trigger accepts
 `fedora_kernel_ver` (Fedora-only run with a chosen kernel) and
 `specific_os` (pin the matrix to one OS).
 
+### PRs that only change tests
+
+If every file a PR changes is a functional test script (or the `.zcp`
+channel program of one), a runfile, or `tests/zfs-tests/tests/Makefile.am`,
+`test-config` passes the changed tests to the matrix
+(`scripts/changed-tests.py detect`).  Each OS then runs only those tests,
+on one VM, in their groups from `common.run` and the platform runfile, so
+with the same setup, cleanup and timeouts as in the full suite; a test
+that isn't in an OS's runfiles is skipped there.  Anything shared between
+tests (`include/`, `.cfg` and `.kshlib` files, `setup.ksh` and
+`cleanup.ksh`, test commands and data) runs the full suite, as does a
+`ZFS-CI-Type` tag.
+
 ### Supported guests
 
 Auto-selected:
