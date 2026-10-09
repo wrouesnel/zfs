@@ -36,6 +36,7 @@
 /mmap_write_source
 /mmap_write_source_race
 /mmap_write_append_race
+/mmap_write_self
 /mmapwrite
 /mmap_write_sync
 /mount_null_source
