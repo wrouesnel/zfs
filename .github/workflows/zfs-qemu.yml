@@ -41,9 +41,9 @@ jobs:
           tests=""
 
           # determine CI type when running on PR
-          if ${{ github.event_name == 'pull_request' }}; then
-            head=${{ github.event.pull_request.head.sha }}
-            base=${{ github.event.pull_request.base.sha }}
+          if true; then  # DEMO ONLY: treat this push like a PR
+            head=${{ github.sha }}
+            base=$(git rev-parse ${{ github.sha }}~1)
             read ci_type ci_source <<< "$(python3 .github/workflows/scripts/generate-ci-type.py $head $base)"
             # A PR that only changes test scripts runs just those tests,
             # unless a ZFS-CI-Type tag asked for something else.
