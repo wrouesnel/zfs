@@ -7,13 +7,15 @@ workflows run independently alongside it.
 ```mermaid
 flowchart TB
 subgraph Functional testing
-  Setup[test-config: pick ci_type + OS matrix]
-  Setup --> almalinux
-  Setup --> centos[centos-stream]
-  Setup --> debian
-  Setup --> fedora
-  Setup --> ubuntu
-  Setup --> freebsd
+  Setup[test-config: pick ci_type + OS matrix] --> Gate
+  Precheck[precheck: zfs-precheck.yml] --> Gate
+  Gate{{qemu-vm: unless the precheck verdict failed}}
+  Gate --> almalinux
+  Gate --> centos[centos-stream]
+  Gate --> debian
+  Gate --> fedora
+  Gate --> ubuntu
+  Gate --> freebsd
   almalinux --> Cleanup[cleanup + summary]
   centos --> Cleanup
   debian --> Cleanup
@@ -32,7 +34,6 @@ subgraph Other workflows
   zfs-arm.yml
   zloop.yml
   labels.yml
-  zfs-precheck.yml
 end
 ```
 
@@ -93,9 +94,10 @@ Available via `specific_os` or `ZTS_OS_OVERRIDE`:
 - `zfs-arm.yml`: ARM build on `ubuntu-24.04-arm`
 - `zloop.yml`: host-side zloop
 - `labels.yml`: maintains PR status labels
-- `zfs-precheck.yml`: quick checks on one VM; for PRs that add a test in
-  one commit and fix the bug in a later commit, checks that the test
-  fails on the test commit and passes on the PR head (see below)
+- `zfs-precheck.yml`: quick checks on one VM, called by `zfs-qemu.yml`
+  before its matrix; for PRs that add a test in one commit and fix the bug
+  in a later commit, checks that the test fails on the test commit and
+  passes on the PR head (see below)
 - `zfs-qemu-packages.yml`: manually dispatched, builds release RPMs or
   tests RPM installation from the ZFS yum repo
 
@@ -120,6 +122,14 @@ all of them must pass without kernel errors.  Tests run one at a time
 with `zfs-tests.sh -t`, and the VM is restarted after a crash or hang.
 The `Verdict` job collects the results.  PRs without a test commit finish
 after `Detect`.
+
+`zfs-qemu.yml` calls `zfs-precheck.yml` as its `precheck` job, and its
+`qemu-vm` matrix waits for it.  The matrix runs if the PR has no test
+commit, or if the verdict passed; if the verdict failed, it is skipped, so
+a PR whose test doesn't catch the bug (or whose fix doesn't fix it) gets a
+quick answer without a full test run.  If the precheck itself breaks, the
+matrix runs anyway.  `zfs-precheck.yml` can also be run on its own with
+`workflow_dispatch`.
 
 The repository variables `FAILFIRST_OS` and `FAILFIRST_UPSTREAM` change
 the test OS and the repository whose `master` is the base for pushes.

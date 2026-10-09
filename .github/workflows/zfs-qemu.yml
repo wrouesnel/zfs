@@ -92,13 +92,26 @@ jobs:
           echo "os=$os_json" | tee -a $GITHUB_OUTPUT
           echo "ci_type=$ci_type" | tee -a $GITHUB_OUTPUT
 
+  # Verify "failing test, then fix" commits on one VM before committing
+  # the resources for the full matrix.
+  precheck:
+    name: Precheck
+    if: github.event_name == 'pull_request' || github.event_name == 'workflow_dispatch' || github.repository != 'openzfs/zfs'
+    uses: ./.github/workflows/zfs-precheck.yml
+
   qemu-vm:
     name: qemu-x86
-    needs: [ test-config ]
+    needs: [ test-config, precheck ]
+    # Run unless the precheck found test commits and they failed
+    # verification.  If the precheck itself broke (found is unset), run.
     if: >-
+      always() &&
+      needs.test-config.result == 'success' &&
       (github.event_name == 'pull_request' ||
       github.repository != 'openzfs/zfs') &&
-      needs.test-config.outputs.ci_type != 'docs'
+      needs.test-config.outputs.ci_type != 'docs' &&
+      (needs.precheck.outputs.found != 'true' ||
+      needs.precheck.result == 'success')
     strategy:
       fail-fast: false
       matrix:

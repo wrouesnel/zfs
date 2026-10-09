@@ -10,10 +10,17 @@ name: zfs-precheck
 #
 # A test commit changes only files under tests/ and adds or modifies a test
 # script; see scripts/failfirst-detect.py.
+#
+# zfs-qemu.yml calls this workflow first and starts its full test matrix
+# only if no test commit was found, or the verdict passed.  It can also be
+# run on its own from the Actions tab.
 
 on:
-  push:
-  pull_request:
+  workflow_call:
+    outputs:
+      found:
+        description: "true if the PR has a test commit to verify"
+        value: ${{ jobs.detect.outputs.found }}
   workflow_dispatch:
     inputs:
       base:
@@ -27,8 +34,10 @@ on:
         default: ""
         description: "(optional) OS to test on (default: ubuntu24)"
 
+# Not github.workflow: when called from zfs-qemu that is the caller's name,
+# and sharing the caller's concurrency group deadlocks the run.
 concurrency:
-  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  group: zfs-precheck-${{ github.head_ref || github.run_id }}
   cancel-in-progress: true
 
 env:
