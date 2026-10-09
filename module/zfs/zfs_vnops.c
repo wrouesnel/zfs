@@ -1,4 +1,5 @@
 // SPDX-License-Identifier: CDDL-1.0
+/* gate demo: no functional change */
 /*
  * This file and its contents are supplied under the terms of the
  * Common Development and Distribution License ("CDDL"), version 1.0.
