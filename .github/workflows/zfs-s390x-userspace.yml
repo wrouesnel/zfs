@@ -1,0 +1,90 @@
+name: zfs-s390x-userspace
+
+# Big-endian userspace checks: build the userland in an s390x container
+# under qemu-user on an x86 runner, then run a zstream raw check on a
+# loop device, the unit tests and a short ztest.  No kernel module.
+
+on:
+  push:
+    branches:
+      - ci-s390x-userspace
+      - ci-s390x-userspace-fix19
+  workflow_dispatch:
+    inputs:
+      ztest_seconds:
+        type: string
+        required: false
+        default: "300"
+        description: "ztest run time in seconds (0 to skip)"
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.head_ref || github.run_id }}
+  cancel-in-progress: true
+
+jobs:
+  s390x-userspace:
+    name: s390x userspace (qemu-user)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 240
+    env:
+      SCRIPT: .github/workflows/scripts/s390x-userspace.sh
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+    - uses: docker/setup-qemu-action@v3
+      with:
+        platforms: s390x
+    - name: Restore ccache
+      uses: actions/cache/restore@v4
+      with:
+        path: .ccache
+        key: s390x-ccache-${{ github.sha }}
+        restore-keys: s390x-ccache-
+    - name: Start s390x container
+      run: |
+        mkdir -p .ccache
+        docker run -d --name s390x --platform linux/s390x --privileged \
+          -v /dev:/dev -v "$PWD:/zfs" -w /zfs \
+          -e CCACHE_DIR=/zfs/.ccache -e CCACHE_MAXSIZE=500M \
+          ubuntu:24.04 sleep infinity
+        docker exec s390x uname -m
+        docker exec s390x sh -c 'echo "byte order: $(printf I | od -An -tx2)"'
+    - name: Install dependencies
+      run: |
+        docker exec s390x $SCRIPT deps
+    - name: Build
+      id: build
+      run: |
+        docker exec s390x $SCRIPT build
+    - name: Save ccache
+      if: always()
+      uses: actions/cache/save@v4
+      with:
+        path: .ccache
+        key: s390x-ccache-${{ github.sha }}
+    - name: zstream raw to a block device
+      if: always() && steps.build.outcome == 'success'
+      run: |
+        docker exec s390x $SCRIPT zstream-prep
+        # Set up the loop device on the runner, so that only zstream's
+        # own ioctls go through qemu-user.
+        dev=$(sudo losetup -f --show .s390x-work/dev.img)
+        echo "loop device: $dev"
+        rc=0
+        docker exec s390x $SCRIPT zstream-raw "$dev" || rc=$?
+        sudo losetup -d "$dev"
+        exit $rc
+    - name: Unit tests
+      if: always() && steps.build.outcome == 'success'
+      run: |
+        docker exec s390x $SCRIPT unit
+    - name: ztest
+      if: always() && steps.build.outcome == 'success'
+      timeout-minutes: 60
+      run: |
+        t="${{ github.event.inputs.ztest_seconds }}"
+        t=${t:-300}
+        if [ "$t" != 0 ]; then
+          docker exec s390x $SCRIPT ztest "$t"
+        fi
