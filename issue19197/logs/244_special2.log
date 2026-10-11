@@ -1,0 +1,6 @@
+    PID USER      PR  NI    VIRT    RES    SHR S  %CPU  %MEM     TIME+ COMMAND
+  66882 root       1 -19       0      0      0 R  90.9   0.0   2:29.96 z_wr_iss
+      1 root      20   0   22312  13376   9524 S   0.0   0.3   0:02.49 systemd
+      2 root      20   0       0      0      0 S   0.0   0.0   0:00.05 kthreadd
+[  478.099055] CPU: 1 PID: 66882 Comm: z_wr_iss Tainted: P           OE      6.8.0-142-generic #142-Ubuntu
+[  478.099060] RIP: 0010:__zfs_dbgmsg+0xba/0x180 [zfs]

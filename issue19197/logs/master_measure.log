@@ -1,0 +1,88 @@
+/dev/vdb: calling ioctl to re-read partition table: Success
+== healthy writes
+write h1         0.31s  pool alloc delta 204648 KiB
+500 x 8K files, pool alloc delta 4136 KiB
+== state: DEGRADED too many errors / label:  aux_state: 'err_exceeded'  degraded: 1 
+== degraded writes
+write g1         0.33s  pool alloc delta 217696 KiB
+500 x 8K files, pool alloc delta 8160 KiB
+== kstats: before zio_stats gang_writes=1604 gang_multilevel=0 metaslab_stats try_hard=5024
+== kstats: after  zio_stats gang_writes=3708 gang_multilevel=0 metaslab_stats try_hard=9312
+== logging while ganging:
+zpool events (non-history): 0
+dbgmsg lines mentioning gang/alloc: 2109 (zfs_flags=4294932990), sample:
+1791716774   ffff8e46813e0000 zio.c:4845:zio_dva_allocate(): t197: metaslab allocation failure, trying ganging: zio ffff8e46b4ec8480, size 131072, error 28
+1791716774   ffff8e4680938000 zio.c:4845:zio_dva_allocate(): t197: metaslab allocation failure, trying ganging: zio ffff8e46b4ecda00, size 131072, error 28
+1791716774   ffff8e46813e0000 zio.c:4845:zio_dva_allocate(): t197: metaslab allocation failure, trying ganging: zio ffff8e46b4ecd580, size 131072, error 28
+dmesg lines: 0
+  pool: t197
+ state: DEGRADED
+status: One or more devices has experienced an unrecoverable error.  An
+	attempt was made to correct the error.  Applications are unaffected.
+action: Determine if the device needs to be replaced, and clear the errors
+	using 'zpool clear' or replace the device with 'zpool replace'.
+   see: https://openzfs.github.io/openzfs-docs/msg/ZFS-8000-9P
+config:
+
+	NAME        STATE     READ WRITE CKSUM
+	t197        DEGRADED     0     0     0
+	  vdb       DEGRADED     0     0     0  too many errors
+
+errors: No known data errors
+== gang counts
+h1: L0 0/1600 L1 0/2 L2 0/1 
+g1: L0 1600/1600 L1 2/2 L2 0/1 
+small/h1: L0 0/1   small/g1: L0 1/1 
+h1 dsize 200M lsize 512
+du -k: 204945
+g1 dsize 213M lsize 512
+du -k: 217805
+== one ganged L0 block pointer
+               0   L0 0:28018000:21000G 20000L/20000P F=1 B=41/41 cksum=0000400420b8face:1000140109b833ee:bf09d5d23a7385e8:d31aecddad92899a
+== zdb -bbb: ganged blocks by type
+	bp count:                  4356
+	ganged count:              4206
+     4	 512K	 144K	 332K	  83K	 3.56	  0.08	    L1 ZFS plain file
+	 number of ganged blocks: 4
+ 4.10K	 408M	 408M	 424M	 103K	 1.00	 99.70	    L0 ZFS plain file
+	 number of ganged blocks: 4.10K
+ 4.11K	 409M	 408M	 425M	 103K	 1.00	 99.78	ZFS plain file
+	 number of ganged blocks: 4.11K
+     5	  65K	  12K	  32K	6.40K	 5.42	  0.01	ZFS directory
+	 number of ganged blocks: 2
+     8	   1M	 160K	 368K	  46K	 6.40	  0.08	    L1 Total
+	 number of ganged blocks: 4
+ 4.23K	 410M	 408M	 425M	 100K	 1.01	 99.89	    L0 Total
+	 number of ganged blocks: 4.10K
+ 4.25K	 413M	 408M	 425M	 100K	 1.01	100.00	Total
+	 number of ganged blocks: 4.11K
+== ZIL: 64 x 128K O_SYNC writes (sync=always) on a frozen pool
+gang_writes delta during sync writes: 128
+WR_INDIRECT block pointers in the ZIL: 64, ganged: 64
+			DVA[0]=<0:455b5000:21000> DVA[1]=<0:30937000:1000> [L0 ZFS plain file] fletcher4 uncompressed unencrypted LE gang unique double size=20000L/20000P birth=59L/59P fill=1 cksum=0000400420b8face:1000140109b833ee:bf09d5d23a7385e8:d31aecddad92899a
+after ZIL replay: f L0 64/64 L1 0/1 
+== cold reads (reps=5)
+cold read h1         0.16s  zfs vdev reads   990  disk reads   990  KiB read  204876
+cold read g1         0.12s  zfs vdev reads  3182  disk reads  3182  KiB read  211356
+cold read h1         0.15s  zfs vdev reads   849  disk reads   849  KiB read  204884
+cold read g1         0.26s  zfs vdev reads  1371  disk reads  1371  KiB read  215408
+cold read h1         0.16s  zfs vdev reads  1119  disk reads  1119  KiB read  204880
+cold read g1         0.17s  zfs vdev reads  1294  disk reads  1294  KiB read  216088
+cold read h1         0.16s  zfs vdev reads   741  disk reads   741  KiB read  204876
+cold read g1         0.23s  zfs vdev reads  1346  disk reads  1346  KiB read  215652
+cold read h1         0.14s  zfs vdev reads   305  disk reads   305  KiB read  204900
+cold read g1         0.24s  zfs vdev reads  1363  disk reads  1363  KiB read  215428
+== persistence: export, module reload, import
+== state: DEGRADED too many errors
+write g2         0.30s  pool alloc delta 217748 KiB
+g2: L0 1600/1600 L1 2/2 L2 0/1 
+== zfs_metaslab_try_hard_before_gang=1
+write th         0.36s  pool alloc delta 204988 KiB
+th: L0 0/1600 L1 0/2 L2 0/1 
+before zio_stats gang_writes=1604 gang_multilevel=0 metaslab_stats try_hard=3292
+after  zio_stats gang_writes=1604 gang_multilevel=0 metaslab_stats try_hard=4953
+== zpool clear
+== state: ONLINE   
+write c1         0.29s  pool alloc delta 204988 KiB
+c1: L0 0/1600 L1 0/2 L2 0/1 
+cold read c1         0.11s  zfs vdev reads  1604  disk reads  1604  KiB read  204876

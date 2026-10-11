@@ -1,0 +1,16 @@
+== grub-fstest grub-fstest (GRUB) 2.12-1ubuntu7.3
+f-200m first L1 0:58ee1000:15000G, gang header members:
+DVA[0]=<0:58eff000:6000> DVA[1]=<0:df26000:6000> [L0 unallocated] fletcher4 uncompressed unencrypted LE gang unique double size=4000L/4000P birth=23L/23P fill=0 cksum=00000689cb4bfdda:00345aa1bf661990:185f5666071eb919:a2eb7c8184564fe4
+DVA[0]=<0:58f04000:7000> DVA[1]=<0:df27000:6000> [L0 unallocated] fletcher4 uncompressed unencrypted LE gang unique double size=4000L/4000P birth=23L/23P fill=0 cksum=000006787fe12824:00337b32519adf4e:11bbf07546c6b983:0ddc91aeb37d74a7
+DVA[0]=<0:58f05000:7000> DVA[1]=<0:df28000:6000> [L0 unallocated] fletcher4 uncompressed unencrypted LE gang unique double size=4000L/4000P birth=23L/23P fill=0 cksum=0000057e6df73c35:00321bbad14f8d02:10b86400a8719c38:a803387cf6c63901
+h-1m: L0 0/8 L1 0/1 
+h-200m: L0 0/1600 L1 0/2 L2 0/1 
+g-1m: L0 8/8 L1 0/1 
+g-200m: L0 1600/1600 L1 2/2 L2 0/1 
+f-200m: L0 1600/1600 L1 2/2 L2 0/1 
+negative control: cmp detects a mismatch (OK)
+grub-fstest cmp h-1m: OK
+grub-fstest cmp h-200m: OK
+grub-fstest cmp g-1m: OK
+grub-fstest cmp g-200m: OK
+grub-fstest cmp f-200m: OK
