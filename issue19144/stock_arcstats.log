@@ -1,0 +1,1620 @@
+1791717248
+c 805306368
+c_max 805306368
+size 700772408
+metadata_size 93106176
+dnode_size 114279048
+memory_throttle_count 0
+arc_prune 418716
+arc_meta_used 297908280
+1791717308
+c 805306368
+c_max 805306368
+size 805252456
+metadata_size 97368576
+dnode_size 114732072
+memory_throttle_count 0
+arc_prune 510557
+arc_meta_used 301342056
+1791717368
+c 805306368
+c_max 805306368
+size 698468760
+metadata_size 94041600
+dnode_size 115074648
+memory_throttle_count 0
+arc_prune 607195
+arc_meta_used 299250072
+1791717428
+c 805306368
+c_max 805306368
+size 782745760
+metadata_size 101481984
+dnode_size 115148592
+memory_throttle_count 0
+arc_prune 697879
+arc_meta_used 308492080
+1791717488
+c 805306368
+c_max 805306368
+size 806309824
+metadata_size 99564032
+dnode_size 115094304
+memory_throttle_count 0
+arc_prune 772820
+arc_meta_used 304321840
+1791717548
+c 805306368
+c_max 805306368
+size 805258960
+metadata_size 98246144
+dnode_size 114867792
+memory_throttle_count 0
+arc_prune 847891
+arc_meta_used 304136912
+1791717608
+c 805306368
+c_max 805306368
+size 718952840
+metadata_size 95857152
+dnode_size 114777000
+memory_throttle_count 0
+arc_prune 913621
+arc_meta_used 299530152
+1791717668
+c 805306368
+c_max 805306368
+size 722673256
+metadata_size 99411968
+dnode_size 114786360
+memory_throttle_count 0
+arc_prune 981653
+arc_meta_used 304979048
+1791717728
+c 805306368
+c_max 805306368
+size 709631480
+metadata_size 95697408
+dnode_size 114876216
+memory_throttle_count 0
+arc_prune 1053092
+arc_meta_used 299116200
+1791717788
+c 805306368
+c_max 805306368
+size 805210344
+metadata_size 98535424
+dnode_size 115269336
+memory_throttle_count 0
+arc_prune 1137979
+arc_meta_used 302914888
+1791717848
+c 805306368
+c_max 805306368
+size 804415456
+metadata_size 98959360
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 1233092
+arc_meta_used 305116128
+1791717908
+c 805306368
+c_max 805306368
+size 760245728
+metadata_size 94897152
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 1330537
+arc_meta_used 298810336
+1791717968
+c 805306368
+c_max 805306368
+size 717384696
+metadata_size 99156480
+dnode_size 115256232
+memory_throttle_count 0
+arc_prune 1421802
+arc_meta_used 304639992
+1791718028
+c 805306368
+c_max 805306368
+size 805207488
+metadata_size 98184192
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 1521186
+arc_meta_used 302242240
+1791718088
+c 805306368
+c_max 805306368
+size 758310072
+metadata_size 101959680
+dnode_size 114977304
+memory_throttle_count 0
+arc_prune 1615275
+arc_meta_used 306183448
+1791718148
+c 805306368
+c_max 805306368
+size 791112280
+metadata_size 101940736
+dnode_size 115209432
+memory_throttle_count 0
+arc_prune 1709182
+arc_meta_used 307991640
+1791718208
+c 805306368
+c_max 805306368
+size 794767760
+metadata_size 103666688
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 1804552
+arc_meta_used 310795664
+1791718268
+c 805306368
+c_max 805306368
+size 773930816
+metadata_size 104086016
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 1897073
+arc_meta_used 310452544
+1791718328
+c 805306368
+c_max 805306368
+size 806616984
+metadata_size 98696704
+dnode_size 115001640
+memory_throttle_count 0
+arc_prune 1985828
+arc_meta_used 303720920
+1791718388
+c 805306368
+c_max 805306368
+size 780012320
+metadata_size 94636032
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2070702
+arc_meta_used 299219968
+1791718448
+c 805306368
+c_max 805306368
+size 793685024
+metadata_size 97278976
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2154789
+arc_meta_used 301153824
+1791718508
+c 805306368
+c_max 805306368
+size 805234768
+metadata_size 96403968
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2245442
+arc_meta_used 300994528
+1791718569
+c 805306368
+c_max 805306368
+size 710453136
+metadata_size 99469312
+dnode_size 114931440
+memory_throttle_count 0
+arc_prune 2341350
+arc_meta_used 303986432
+1791718629
+c 805306368
+c_max 805306368
+size 800346192
+metadata_size 97352704
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2418288
+arc_meta_used 301491008
+1791718689
+c 805306368
+c_max 805306368
+size 694579312
+metadata_size 90846720
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2473200
+arc_meta_used 294437072
+1791718749
+c 805306368
+c_max 805306368
+size 805191248
+metadata_size 98441216
+dnode_size 114944544
+memory_throttle_count 0
+arc_prune 2533975
+arc_meta_used 302629696
+1791718809
+c 805306368
+c_max 805306368
+size 804448320
+metadata_size 102717952
+dnode_size 115041888
+memory_throttle_count 0
+arc_prune 2591678
+arc_meta_used 307019296
+1791718869
+c 805306368
+c_max 805306368
+size 805248920
+metadata_size 96637440
+dnode_size 115256232
+memory_throttle_count 0
+arc_prune 2657497
+arc_meta_used 301630968
+1791718929
+c 805306368
+c_max 805306368
+size 805245520
+metadata_size 94234112
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2732205
+arc_meta_used 298174544
+1791718989
+c 772027712
+c_max 805306368
+size 770252608
+metadata_size 100614656
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2822380
+arc_meta_used 304630256
+1791719049
+c 740068472
+c_max 805306368
+size 739980032
+metadata_size 98143232
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 2915963
+arc_meta_used 301865248
+1791719109
+c 750463912
+c_max 805306368
+size 750361152
+metadata_size 99587584
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 3005063
+arc_meta_used 303411296
+1791719169
+c 792262312
+c_max 805306368
+size 766681848
+metadata_size 96020992
+dnode_size 115070904
+memory_throttle_count 0
+arc_prune 3100283
+arc_meta_used 300649784
+1791719229
+c 805306368
+c_max 805306368
+size 803081280
+metadata_size 96223232
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 3196124
+arc_meta_used 301793008
+1791719289
+c 805306368
+c_max 805306368
+size 802596008
+metadata_size 102525440
+dnode_size 115044696
+memory_throttle_count 0
+arc_prune 3289587
+arc_meta_used 306811720
+1791719349
+c 805306368
+c_max 805306368
+size 801793056
+metadata_size 99896320
+dnode_size 115219728
+memory_throttle_count 0
+arc_prune 3379015
+arc_meta_used 304673408
+1791719409
+c 805306368
+c_max 805306368
+size 804192320
+metadata_size 101364224
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 3473987
+arc_meta_used 305443760
+1791719469
+c 805306368
+c_max 805306368
+size 805299664
+metadata_size 97108992
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 3569207
+arc_meta_used 300868560
+1791719529
+c 805306368
+c_max 805306368
+size 755487128
+metadata_size 97358848
+dnode_size 114951096
+memory_throttle_count 0
+arc_prune 3659831
+arc_meta_used 301295992
+1791719589
+c 805306368
+c_max 805306368
+size 736865368
+metadata_size 97385984
+dnode_size 115095240
+memory_throttle_count 0
+arc_prune 3747940
+arc_meta_used 301734648
+1791719649
+c 805306368
+c_max 805306368
+size 698733968
+metadata_size 94125056
+dnode_size 114925824
+memory_throttle_count 0
+arc_prune 3842616
+arc_meta_used 297863456
+1791719709
+c 805306368
+c_max 805306368
+size 763261432
+metadata_size 102561280
+dnode_size 114786360
+memory_throttle_count 0
+arc_prune 3930012
+arc_meta_used 307346936
+1791719769
+c 805306368
+c_max 805306368
+size 803550832
+metadata_size 96983040
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 4017210
+arc_meta_used 303006640
+1791719829
+c 805306368
+c_max 805306368
+size 717782048
+metadata_size 93371904
+dnode_size 115421904
+memory_throttle_count 0
+arc_prune 4101051
+arc_meta_used 298724664
+1791719889
+c 805306368
+c_max 805306368
+size 700545112
+metadata_size 98761216
+dnode_size 115084008
+memory_throttle_count 0
+arc_prune 4184573
+arc_meta_used 302907880
+1791719949
+c 805306368
+c_max 805306368
+size 804829496
+metadata_size 100862976
+dnode_size 114977304
+memory_throttle_count 0
+arc_prune 4267248
+arc_meta_used 305250104
+1791720009
+c 805306368
+c_max 805306368
+size 727644768
+metadata_size 101314560
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 4351989
+arc_meta_used 307476448
+1791720069
+c 805306368
+c_max 805306368
+size 755532000
+metadata_size 102174720
+dnode_size 115230960
+memory_throttle_count 0
+arc_prune 4435580
+arc_meta_used 307347296
+1791720129
+c 805306368
+c_max 805306368
+size 695472960
+metadata_size 94108160
+dnode_size 114875280
+memory_throttle_count 0
+arc_prune 4527800
+arc_meta_used 297835968
+1791720189
+c 805306368
+c_max 805306368
+size 805284656
+metadata_size 105336832
+dnode_size 115092432
+memory_throttle_count 0
+arc_prune 4627199
+arc_meta_used 309992224
+1791720249
+c 805306368
+c_max 805306368
+size 747117344
+metadata_size 102392832
+dnode_size 115219728
+memory_throttle_count 0
+arc_prune 4726266
+arc_meta_used 307708192
+1791720309
+c 805306368
+c_max 805306368
+size 673722232
+metadata_size 93301248
+dnode_size 115295544
+memory_throttle_count 0
+arc_prune 4822222
+arc_meta_used 297818504
+1791720369
+c 805306368
+c_max 805306368
+size 805194696
+metadata_size 97880064
+dnode_size 115186968
+memory_throttle_count 0
+arc_prune 4919795
+arc_meta_used 302614568
+1791720429
+c 805306368
+c_max 805306368
+size 804372896
+metadata_size 96977920
+dnode_size 115067160
+memory_throttle_count 0
+arc_prune 5010131
+arc_meta_used 301468680
+1791720489
+c 805306368
+c_max 805306368
+size 805193888
+metadata_size 103738880
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 5098971
+arc_meta_used 309753088
+1791720549
+c 805306368
+c_max 805306368
+size 700486856
+metadata_size 94722560
+dnode_size 114964200
+memory_throttle_count 0
+arc_prune 5187268
+arc_meta_used 298526472
+1791720609
+c 805306368
+c_max 805306368
+size 694831840
+metadata_size 100297728
+dnode_size 115217856
+memory_throttle_count 0
+arc_prune 5270389
+arc_meta_used 304888032
+1791720670
+c 805306368
+c_max 805306368
+size 716441936
+metadata_size 100160000
+dnode_size 114905232
+memory_throttle_count 0
+arc_prune 5363211
+arc_meta_used 304463728
+1791720730
+c 805306368
+c_max 805306368
+size 757021248
+metadata_size 105105408
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 5450318
+arc_meta_used 311284576
+1791720790
+c 805306368
+c_max 805306368
+size 802759776
+metadata_size 96861184
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 5534519
+arc_meta_used 300704320
+1791720850
+c 805306368
+c_max 805306368
+size 805188112
+metadata_size 100750336
+dnode_size 115034400
+memory_throttle_count 0
+arc_prune 5621346
+arc_meta_used 305312400
+1791720910
+c 805306368
+c_max 805306368
+size 791174288
+metadata_size 97659904
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 5701113
+arc_meta_used 301404944
+1791720970
+c 805306368
+c_max 805306368
+size 701712480
+metadata_size 95590912
+dnode_size 115021296
+memory_throttle_count 0
+arc_prune 5782828
+arc_meta_used 299727808
+1791721030
+c 805306368
+c_max 805306368
+size 802971832
+metadata_size 101484544
+dnode_size 115731720
+memory_throttle_count 0
+arc_prune 5860265
+arc_meta_used 307536936
+1791721090
+c 805306368
+c_max 805306368
+size 703484672
+metadata_size 93215232
+dnode_size 115174800
+memory_throttle_count 0
+arc_prune 5934587
+arc_meta_used 297456800
+1791721150
+c 805306368
+c_max 805306368
+size 774500304
+metadata_size 96127488
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 6013330
+arc_meta_used 299879376
+1791721210
+c 805306368
+c_max 805306368
+size 805241568
+metadata_size 95362560
+dnode_size 114950160
+memory_throttle_count 0
+arc_prune 6090273
+arc_meta_used 299629712
+1791721270
+c 764289056
+c_max 805306368
+size 667194552
+metadata_size 102792192
+dnode_size 114921144
+memory_throttle_count 0
+arc_prune 6162599
+arc_meta_used 306574264
+1791721330
+c 795002528
+c_max 805306368
+size 671878520
+metadata_size 93671424
+dnode_size 114997896
+memory_throttle_count 0
+arc_prune 6242277
+arc_meta_used 297436792
+1791721390
+c 805306368
+c_max 805306368
+size 715379952
+metadata_size 95108096
+dnode_size 115054992
+memory_throttle_count 0
+arc_prune 6324739
+arc_meta_used 299081552
+1791721450
+c 805306368
+c_max 805306368
+size 805545712
+metadata_size 99074048
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 6416758
+arc_meta_used 302872800
+1791721510
+c 805306368
+c_max 805306368
+size 804110976
+metadata_size 100297728
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 6509010
+arc_meta_used 306222352
+1791721570
+c 805306368
+c_max 805306368
+size 798935184
+metadata_size 96913408
+dnode_size 115494912
+memory_throttle_count 0
+arc_prune 6598673
+arc_meta_used 302297168
+1791721630
+c 805306368
+c_max 805306368
+size 805194872
+metadata_size 96441344
+dnode_size 115164504
+memory_throttle_count 0
+arc_prune 6691962
+arc_meta_used 301583528
+1791721690
+c 805306368
+c_max 805306368
+size 803956328
+metadata_size 98992128
+dnode_size 115001640
+memory_throttle_count 0
+arc_prune 6786690
+arc_meta_used 303214872
+1791721750
+c 805306368
+c_max 805306368
+size 802179120
+metadata_size 96183808
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 6880458
+arc_meta_used 300167968
+1791721810
+c 805306368
+c_max 805306368
+size 802840016
+metadata_size 99056128
+dnode_size 115229088
+memory_throttle_count 0
+arc_prune 6973646
+arc_meta_used 303937632
+1791721870
+c 805306368
+c_max 805306368
+size 802100096
+metadata_size 106749440
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 7062685
+arc_meta_used 313034448
+1791721930
+c 805306368
+c_max 805306368
+size 783321528
+metadata_size 96053760
+dnode_size 115057800
+memory_throttle_count 0
+arc_prune 7147322
+arc_meta_used 300235704
+1791721990
+c 805306368
+c_max 805306368
+size 805169600
+metadata_size 99342336
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 7227595
+arc_meta_used 305439680
+1791722050
+c 805306368
+c_max 805306368
+size 802830560
+metadata_size 96018432
+dnode_size 115077456
+memory_throttle_count 0
+arc_prune 7310029
+arc_meta_used 300536912
+1791722110
+c 805306368
+c_max 805306368
+size 770968528
+metadata_size 96200704
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 7394086
+arc_meta_used 299895264
+1791722170
+c 796761536
+c_max 805306368
+size 763140992
+metadata_size 98691072
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 7487364
+arc_meta_used 302284224
+1791722230
+c 790741352
+c_max 805306368
+size 757174320
+metadata_size 95698944
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 7577723
+arc_meta_used 299375280
+1791722290
+c 805306368
+c_max 805306368
+size 804313832
+metadata_size 96701952
+dnode_size 115724232
+memory_throttle_count 0
+arc_prune 7659596
+arc_meta_used 302652600
+1791722350
+c 805306368
+c_max 805306368
+size 756717800
+metadata_size 102017536
+dnode_size 115091496
+memory_throttle_count 0
+arc_prune 7744191
+arc_meta_used 306511296
+1791722411
+c 805306368
+c_max 805306368
+size 777866432
+metadata_size 94418432
+dnode_size 115058736
+memory_throttle_count 0
+arc_prune 7824616
+arc_meta_used 298587264
+1791722471
+c 805306368
+c_max 805306368
+size 804538112
+metadata_size 99266560
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 7906575
+arc_meta_used 305047456
+1791722531
+c 805306368
+c_max 805306368
+size 805103040
+metadata_size 100974592
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 7990307
+arc_meta_used 307097024
+1791722591
+c 805306368
+c_max 805306368
+size 801708512
+metadata_size 102745088
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 8083763
+arc_meta_used 307325056
+1791722651
+c 805306368
+c_max 805306368
+size 788897352
+metadata_size 103555072
+dnode_size 115054056
+memory_throttle_count 0
+arc_prune 8175839
+arc_meta_used 308033448
+1791722711
+c 805306368
+c_max 805306368
+size 805210816
+metadata_size 100947968
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 8246221
+arc_meta_used 306402752
+1791722771
+c 805306368
+c_max 805306368
+size 805269584
+metadata_size 98386944
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 8298417
+arc_meta_used 302459248
+1791722831
+c 805306368
+c_max 805306368
+size 689475096
+metadata_size 99878912
+dnode_size 115289928
+memory_throttle_count 0
+arc_prune 8351965
+arc_meta_used 304959000
+1791722891
+c 805306368
+c_max 805306368
+size 802359936
+metadata_size 98310656
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 8406369
+arc_meta_used 304815360
+1791722951
+c 805306368
+c_max 805306368
+size 805050568
+metadata_size 101184000
+dnode_size 115196328
+memory_throttle_count 0
+arc_prune 8471849
+arc_meta_used 306034952
+1791723011
+c 805306368
+c_max 805306368
+size 758027216
+metadata_size 101938176
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 8553123
+arc_meta_used 306478544
+1791723071
+c 805306368
+c_max 805306368
+size 697080920
+metadata_size 100727296
+dnode_size 114937992
+memory_throttle_count 0
+arc_prune 8625291
+arc_meta_used 305068216
+1791723131
+c 805306368
+c_max 805306368
+size 711143656
+metadata_size 92747264
+dnode_size 114986664
+memory_throttle_count 0
+arc_prune 8696670
+arc_meta_used 297058392
+1791723191
+c 805306368
+c_max 805306368
+size 787371040
+metadata_size 106012160
+dnode_size 115202880
+memory_throttle_count 0
+arc_prune 8761158
+arc_meta_used 310682240
+1791723251
+c 805306368
+c_max 805306368
+size 805273792
+metadata_size 99019776
+dnode_size 115054992
+memory_throttle_count 0
+arc_prune 8827069
+arc_meta_used 302888912
+1791723311
+c 805306368
+c_max 805306368
+size 805261848
+metadata_size 96730624
+dnode_size 114958584
+memory_throttle_count 0
+arc_prune 8894589
+arc_meta_used 300795928
+1791723371
+c 805306368
+c_max 805306368
+size 802923888
+metadata_size 100515328
+dnode_size 115019424
+memory_throttle_count 0
+arc_prune 8969024
+arc_meta_used 304860880
+1791723431
+c 805306368
+c_max 805306368
+size 717496208
+metadata_size 93841408
+dnode_size 114787296
+memory_throttle_count 0
+arc_prune 9044106
+arc_meta_used 297558032
+1791723491
+c 805306368
+c_max 805306368
+size 788348008
+metadata_size 99448832
+dnode_size 114956712
+memory_throttle_count 0
+arc_prune 9121332
+arc_meta_used 303498856
+1791723551
+c 805306368
+c_max 805306368
+size 803020704
+metadata_size 97295872
+dnode_size 115105536
+memory_throttle_count 0
+arc_prune 9198973
+arc_meta_used 302089888
+1791723611
+c 632849040
+c_max 805306368
+size 632830496
+metadata_size 100722688
+dnode_size 115255296
+memory_throttle_count 0
+arc_prune 9280030
+arc_meta_used 305185456
+1791723671
+c 805306368
+c_max 805306368
+size 805216992
+metadata_size 99296256
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 9359396
+arc_meta_used 303239440
+1791723731
+c 791498896
+c_max 805306368
+size 711339320
+metadata_size 95965696
+dnode_size 114786360
+memory_throttle_count 0
+arc_prune 9445483
+arc_meta_used 299524408
+1791723791
+c 805306368
+c_max 805306368
+size 717134080
+metadata_size 91948032
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 9531687
+arc_meta_used 295556864
+1791723851
+c 805306368
+c_max 805306368
+size 776775656
+metadata_size 98166272
+dnode_size 115233768
+memory_throttle_count 0
+arc_prune 9622862
+arc_meta_used 302991336
+1791723911
+c 805306368
+c_max 805306368
+size 804505776
+metadata_size 96572928
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 9707424
+arc_meta_used 300488592
+1791723971
+c 805306368
+c_max 805306368
+size 803762912
+metadata_size 96922624
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 9782841
+arc_meta_used 300863488
+1791724031
+c 805306368
+c_max 805306368
+size 669092112
+metadata_size 94495232
+dnode_size 114989472
+memory_throttle_count 0
+arc_prune 9862473
+arc_meta_used 298530064
+1791724091
+c 805306368
+c_max 805306368
+size 804924128
+metadata_size 100088832
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 9940564
+arc_meta_used 306161920
+1791724151
+c 805306368
+c_max 805306368
+size 805596368
+metadata_size 95991296
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 10010756
+arc_meta_used 301969312
+1791724211
+c 805306368
+c_max 805306368
+size 803247744
+metadata_size 96601088
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 10080336
+arc_meta_used 300567536
+1791724271
+c 805306368
+c_max 805306368
+size 764945496
+metadata_size 96773632
+dnode_size 115016616
+memory_throttle_count 0
+arc_prune 10151538
+arc_meta_used 300963352
+1791724332
+c 805306368
+c_max 805306368
+size 805228928
+metadata_size 107174912
+dnode_size 115109280
+memory_throttle_count 0
+arc_prune 10230753
+arc_meta_used 311903616
+1791724392
+c 805306368
+c_max 805306368
+size 805267704
+metadata_size 100280320
+dnode_size 115482744
+memory_throttle_count 0
+arc_prune 10309629
+arc_meta_used 305724216
+1791724452
+c 805306368
+c_max 805306368
+size 704293624
+metadata_size 101202944
+dnode_size 115029720
+memory_throttle_count 0
+arc_prune 10388372
+arc_meta_used 305398248
+1791724512
+c 805306368
+c_max 805306368
+size 732296408
+metadata_size 100805632
+dnode_size 115597872
+memory_throttle_count 0
+arc_prune 10471336
+arc_meta_used 306323360
+1791724572
+c 805306368
+c_max 805306368
+size 747106112
+metadata_size 101383168
+dnode_size 115169184
+memory_throttle_count 0
+arc_prune 10560987
+arc_meta_used 306462016
+1791724632
+c 805306368
+c_max 805306368
+size 687932296
+metadata_size 98984960
+dnode_size 114861240
+memory_throttle_count 0
+arc_prune 10650853
+arc_meta_used 302757176
+1791724692
+c 805306368
+c_max 805306368
+size 782314736
+metadata_size 101736960
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 10734389
+arc_meta_used 306320912
+1791724752
+c 805306368
+c_max 805306368
+size 697639856
+metadata_size 97329152
+dnode_size 115139232
+memory_throttle_count 0
+arc_prune 10802157
+arc_meta_used 302076432
+1791724812
+c 805306368
+c_max 805306368
+size 759565624
+metadata_size 99635712
+dnode_size 114828480
+memory_throttle_count 0
+arc_prune 10865327
+arc_meta_used 304127216
+1791724872
+c 805306368
+c_max 805306368
+size 805503664
+metadata_size 97671168
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 10941955
+arc_meta_used 301167808
+1791724932
+c 805306368
+c_max 805306368
+size 803861312
+metadata_size 101711360
+dnode_size 115178544
+memory_throttle_count 0
+arc_prune 11015613
+arc_meta_used 306934768
+1791724992
+c 805306368
+c_max 805306368
+size 805219784
+metadata_size 103976960
+dnode_size 114850008
+memory_throttle_count 0
+arc_prune 11086351
+arc_meta_used 308065736
+1791725052
+c 805306368
+c_max 805306368
+size 805345088
+metadata_size 98747904
+dnode_size 115146720
+memory_throttle_count 0
+arc_prune 11153007
+arc_meta_used 303374304
+1791725112
+c 805306368
+c_max 805306368
+size 685328880
+metadata_size 89986048
+dnode_size 115204752
+memory_throttle_count 0
+arc_prune 11221758
+arc_meta_used 294482112
+1791725172
+c 805306368
+c_max 805306368
+size 805182048
+metadata_size 97669120
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 11290732
+arc_meta_used 301946928
+1791725232
+c 805306368
+c_max 805306368
+size 741433184
+metadata_size 93667328
+dnode_size 114968880
+memory_throttle_count 0
+arc_prune 11367616
+arc_meta_used 297778096
+1791725292
+c 805306368
+c_max 805306368
+size 801726704
+metadata_size 104949760
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 11456217
+arc_meta_used 311169520
+1791725352
+c 805306368
+c_max 805306368
+size 805125904
+metadata_size 99196416
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 11540532
+arc_meta_used 305391040
+1791725412
+c 805306368
+c_max 805306368
+size 804931600
+metadata_size 99575808
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 11623440
+arc_meta_used 305439248
+1791725472
+c 805306368
+c_max 805306368
+size 805216864
+metadata_size 98606080
+dnode_size 115251552
+memory_throttle_count 0
+arc_prune 11702566
+arc_meta_used 303451744
+1791725532
+c 805306368
+c_max 805306368
+size 724460680
+metadata_size 99991552
+dnode_size 115648416
+memory_throttle_count 0
+arc_prune 11782495
+arc_meta_used 305637048
+1791725592
+c 805306368
+c_max 805306368
+size 726876032
+metadata_size 93624832
+dnode_size 115199136
+memory_throttle_count 0
+arc_prune 11863346
+arc_meta_used 298306432
+1791725652
+c 805306368
+c_max 805306368
+size 805247952
+metadata_size 99841536
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 11941388
+arc_meta_used 303910240
+1791725712
+c 805306368
+c_max 805306368
+size 805438240
+metadata_size 99424256
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 12018871
+arc_meta_used 306332768
+1791725772
+c 805306368
+c_max 805306368
+size 802327120
+metadata_size 97342976
+dnode_size 115062480
+memory_throttle_count 0
+arc_prune 12092567
+arc_meta_used 301736752
+1791725832
+c 805306368
+c_max 805306368
+size 805178672
+metadata_size 97447936
+dnode_size 115201008
+memory_throttle_count 0
+arc_prune 12177131
+arc_meta_used 302285104
+1791725893
+c 805306368
+c_max 805306368
+size 686089640
+metadata_size 92214272
+dnode_size 114850008
+memory_throttle_count 0
+arc_prune 12269445
+arc_meta_used 295835448
+1791725953
+c 805306368
+c_max 805306368
+size 691566240
+metadata_size 97975808
+dnode_size 115558560
+memory_throttle_count 0
+arc_prune 12348411
+arc_meta_used 303146816
+1791726013
+c 805306368
+c_max 805306368
+size 669498560
+metadata_size 90522624
+dnode_size 114787296
+memory_throttle_count 0
+arc_prune 12430470
+arc_meta_used 294567872
+1791726073
+c 805306368
+c_max 805306368
+size 674916376
+metadata_size 93407744
+dnode_size 115009128
+memory_throttle_count 0
+arc_prune 12508882
+arc_meta_used 297573208
+1791726133
+c 805306368
+c_max 805306368
+size 697101096
+metadata_size 94246400
+dnode_size 114848136
+memory_throttle_count 0
+arc_prune 12588181
+arc_meta_used 298527016
+1791726193
+c 805306368
+c_max 805306368
+size 802653712
+metadata_size 103282688
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 12668571
+arc_meta_used 307300400
+1791726253
+c 805306368
+c_max 805306368
+size 764539984
+metadata_size 95013376
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 12749042
+arc_meta_used 298802640
+1791726313
+c 805306368
+c_max 805306368
+size 804952608
+metadata_size 98496512
+dnode_size 114931440
+memory_throttle_count 0
+arc_prune 12829571
+arc_meta_used 302721648
+1791726373
+c 805306368
+c_max 805306368
+size 804661344
+metadata_size 97543168
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 12904969
+arc_meta_used 303659984
+1791726433
+c 805306368
+c_max 805306368
+size 805234296
+metadata_size 98600448
+dnode_size 115256232
+memory_throttle_count 0
+arc_prune 12983178
+arc_meta_used 303441112
+1791726493
+c 805306368
+c_max 805306368
+size 790314192
+metadata_size 97469440
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 13059583
+arc_meta_used 301476224
+1791726553
+c 805306368
+c_max 805306368
+size 725365120
+metadata_size 93868032
+dnode_size 114787296
+memory_throttle_count 0
+arc_prune 13148497
+arc_meta_used 297953728
+1791726613
+c 805306368
+c_max 805306368
+size 802351664
+metadata_size 98041344
+dnode_size 115032528
+memory_throttle_count 0
+arc_prune 13236623
+arc_meta_used 302238768
+1791726673
+c 805306368
+c_max 805306368
+size 704945800
+metadata_size 93308928
+dnode_size 115074648
+memory_throttle_count 0
+arc_prune 13316112
+arc_meta_used 297255336
+1791726733
+c 805306368
+c_max 805306368
+size 802390448
+metadata_size 101134848
+dnode_size 115049376
+memory_throttle_count 0
+arc_prune 13399099
+arc_meta_used 305772592
+1791726793
+c 805306368
+c_max 805306368
+size 805125576
+metadata_size 98353664
+dnode_size 115427520
+memory_throttle_count 0
+arc_prune 13480072
+arc_meta_used 303970232
+1791726853
+c 805306368
+c_max 805306368
+size 803075560
+metadata_size 100217856
+dnode_size 114810696
+memory_throttle_count 0
+arc_prune 13560790
+arc_meta_used 304180552
+1791726913
+c 805306368
+c_max 805306368
+size 722554976
+metadata_size 104324096
+dnode_size 115086816
+memory_throttle_count 0
+arc_prune 13638902
+arc_meta_used 308683360
+1791726973
+c 747393488
+c_max 805306368
+size 737467840
+metadata_size 102748160
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 13724128
+arc_meta_used 307194736
+1791727033
+c 805306368
+c_max 805306368
+size 763394320
+metadata_size 95482368
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 13815252
+arc_meta_used 299065472
+1791727093
+c 805306368
+c_max 805306368
+size 686065392
+metadata_size 94261760
+dnode_size 115281504
+memory_throttle_count 0
+arc_prune 13907673
+arc_meta_used 298558384
+1791727153
+c 805306368
+c_max 805306368
+size 805291808
+metadata_size 99021312
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 14000520
+arc_meta_used 303017248
+1791727213
+c 805306368
+c_max 805306368
+size 804194568
+metadata_size 96383488
+dnode_size 114934248
+memory_throttle_count 0
+arc_prune 14094348
+arc_meta_used 300323944
+1791727273
+c 805306368
+c_max 805306368
+size 776787232
+metadata_size 96209920
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 14187877
+arc_meta_used 299700000
+1791727333
+c 805306368
+c_max 805306368
+size 805294568
+metadata_size 99838976
+dnode_size 115729848
+memory_throttle_count 0
+arc_prune 14279486
+arc_meta_used 305757032
+1791727394
+c 805306368
+c_max 805306368
+size 776533072
+metadata_size 98653696
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 14371684
+arc_meta_used 302854064
+1791727454
+c 805306368
+c_max 805306368
+size 750280480
+metadata_size 98881024
+dnode_size 115405056
+memory_throttle_count 0
+arc_prune 14463282
+arc_meta_used 303816744
+1791727514
+c 805306368
+c_max 805306368
+size 804293696
+metadata_size 99325440
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 14551563
+arc_meta_used 303208224
+1791727574
+c 805306368
+c_max 805306368
+size 805222224
+metadata_size 99336192
+dnode_size 114785424
+memory_throttle_count 0
+arc_prune 14641291
+arc_meta_used 303210912
+1791727634
+c 805306368
+c_max 805306368
+size 803165400
+metadata_size 97620992
+dnode_size 115052184
+memory_throttle_count 0
+arc_prune 14727959
+arc_meta_used 301798520
+1791727694
+c 805306368
+c_max 805306368
+size 804440384
+metadata_size 96781312
+dnode_size 115723296
+memory_throttle_count 0
+arc_prune 14815362
+arc_meta_used 302702400
+1791727754
+c 805306368
+c_max 805306368
+size 803224504
+metadata_size 102940672
+dnode_size 115686792
+memory_throttle_count 0
+arc_prune 14890435
+arc_meta_used 308671112
+1791727814
+c 805306368
+c_max 805306368
+size 803500160
+metadata_size 98963456
+dnode_size 115101792
+memory_throttle_count 0
+arc_prune 14962643
+arc_meta_used 303588368
+1791727874
+c 805306368
+c_max 805306368
+size 802807816
+metadata_size 97950208
+dnode_size 114996024
+memory_throttle_count 0
+arc_prune 15042185
+arc_meta_used 302167560
+1791727934
+c 805306368
+c_max 805306368
+size 802314576
+metadata_size 97015296
+dnode_size 114790104
+memory_throttle_count 0
+arc_prune 15124867
+arc_meta_used 301041064
+1791727994
+c 805306368
+c_max 805306368
+size 666000800
+metadata_size 93069312
+dnode_size 115257168
+memory_throttle_count 0
+arc_prune 15205444
+arc_meta_used 297309120
