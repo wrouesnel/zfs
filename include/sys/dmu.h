@@ -293,6 +293,13 @@ typedef enum {
 	 * assignment, regardless of the value of the failmode= property.
 	 */
 	DMU_TX_SUSPEND		= (1 << 2),
+
+	/*
+	 * With DMU_TX_WAIT, return EIO if the pool is or becomes suspended
+	 * during assignment, regardless of the value of the failmode=
+	 * property.  Can not be combined with DMU_TX_SUSPEND.
+	 */
+	DMU_TX_SUSPEND_EIO	= (1 << 3),
 } dmu_tx_flag_t;
 
 void byteswap_uint64_array(void *buf, size_t size);

@@ -1219,6 +1219,11 @@ dmu_tx_unassign(dmu_tx_t *tx)
  * If this flag is not set and the pool suspends, the return will be either
  * ERESTART or EIO, depending on the value of the pool's failmode= property.
  *
+ * If DMU_TX_SUSPEND_EIO is set, the return will be EIO if the pool is or
+ * becomes suspended, as with failmode=continue, whatever the failmode= of
+ * the pool.  This is for transactions that are not worth blocking for,
+ * such as the history record of a command that has already completed.
+ *
  * It is guaranteed that subsequent successful calls to dmu_tx_assign()
  * will assign the tx to monotonically increasing txgs. Of course this is
  * not strong monotonicity, because the same txg can be returned multiple
@@ -1242,8 +1247,10 @@ dmu_tx_assign(dmu_tx_t *tx, dmu_tx_flag_t flags)
 	int err;
 
 	ASSERT0(tx->tx_txg);
-	ASSERT0(flags & ~(DMU_TX_WAIT | DMU_TX_NOTHROTTLE | DMU_TX_SUSPEND));
+	ASSERT0(flags & ~(DMU_TX_WAIT | DMU_TX_NOTHROTTLE | DMU_TX_SUSPEND |
+	    DMU_TX_SUSPEND_EIO));
 	IMPLY(flags & DMU_TX_SUSPEND, flags & DMU_TX_WAIT);
+	IMPLY(flags & DMU_TX_SUSPEND_EIO, !(flags & DMU_TX_SUSPEND));
 	ASSERT(!dsl_pool_sync_context(tx->tx_pool));
 
 	/* If we might wait, we must not hold the config lock. */
@@ -1271,13 +1278,13 @@ dmu_tx_assign(dmu_tx_t *tx, dmu_tx_flag_t flags)
 				 * suspend, so treat it as a normal retry.
 				 */
 				err = SET_ERROR(ERESTART);
-			else if (spa_get_failmode(spa) ==
+			else if ((flags & DMU_TX_SUSPEND_EIO) ||
+			    spa_get_failmode(spa) ==
 			    ZIO_FAILURE_MODE_CONTINUE)
 				/*
-				 * Pool config says not to block,
-				 * so return EIO to be propagated
-				 * back to userspace, whatever the
-				 * caller's flags.
+				 * The caller or the pool config says
+				 * not to block, so return EIO to be
+				 * propagated back to userspace.
 				 */
 				err = SET_ERROR(EIO);
 			else
