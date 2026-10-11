@@ -385,8 +385,14 @@ spa_history_log_nvl(spa_t *spa, nvlist_t *nvl)
 		delay(MSEC_TO_TICK(zfs_history_log_delay_ms));
 	}
 
+	/*
+	 * This records a command or ioctl that has already completed, and
+	 * the record is written asynchronously anyway.  If the pool is or
+	 * becomes suspended, fail rather than block the caller until the
+	 * pool resumes, even with failmode=wait.
+	 */
 	tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
-	err = dmu_tx_assign(tx, DMU_TX_WAIT);
+	err = dmu_tx_assign(tx, DMU_TX_WAIT | DMU_TX_SUSPEND_EIO);
 	if (err) {
 		dmu_tx_abort(tx);
 		return (err);
