@@ -2023,6 +2023,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/raidz/raidz_zinject.ksh \
 	functional/raidz/raidz_parity_epochs_dedup_pos.ksh \
 	functional/raidz/raidz_detach_neg.ksh \
+	functional/raidz/raidz_parity_epochs_expand_import.ksh \
 	functional/raidz/raidz_parity_epochs_pos.ksh \
 	functional/raidz/raidz_parity_epochs_properties_pos.ksh \
 	functional/raidz/raidz_parity_epochs_resilver_pos.ksh \
@@ -2035,6 +2036,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/raidz/raidz_parity_epochs_layout_pos.ksh \
 	functional/raidz/raidz_parity_epochs_validate_neg.ksh \
 	functional/raidz/raidz_parity_epochs_width_neg.ksh \
+	functional/raidz/raidz_parity_epochs_wide_table_neg.ksh \
 	functional/raidz/raidz_recon_mixed_pos.ksh \
 	functional/raidz/raidz_recon_pos.ksh \
 	functional/raidz/raidz_tolerance_epochs_pos.ksh \
