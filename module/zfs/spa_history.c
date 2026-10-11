@@ -32,6 +32,13 @@
 #include "zfs_gitrev.h"
 
 /*
+ * For testing: spa_history_log_nvl() waits this many milliseconds before
+ * it assigns its transaction, so that a test can suspend the pool after
+ * a command has completed but before its history record is written.
+ */
+static uint_t zfs_history_log_delay_ms = 0;
+
+/*
  * Routines to manage the on-disk history log.
  *
  * The history log is stored as a dmu object containing
@@ -372,6 +379,12 @@ spa_history_log_nvl(spa_t *spa, nvlist_t *nvl)
 		(void) nvlist_remove_all(in_nvl, ZPOOL_HIDDEN_ARGS);
 	}
 
+	if (zfs_history_log_delay_ms != 0) {
+		zfs_dbgmsg("history: waiting %u ms before logging to pool %s",
+		    zfs_history_log_delay_ms, spa_name(spa));
+		delay(MSEC_TO_TICK(zfs_history_log_delay_ms));
+	}
+
 	tx = dmu_tx_create_dd(spa_get_dsl(spa)->dp_mos_dir);
 	err = dmu_tx_assign(tx, DMU_TX_WAIT);
 	if (err) {
@@ -629,3 +642,6 @@ EXPORT_SYMBOL(spa_history_log);
 EXPORT_SYMBOL(spa_history_log_internal);
 EXPORT_SYMBOL(spa_history_log_version);
 #endif
+
+ZFS_MODULE_PARAM(zfs, zfs_, history_log_delay_ms, UINT, ZMOD_RW,
+	"Delay before writing each pool history record (testing)");
