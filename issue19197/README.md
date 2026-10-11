@@ -17,4 +17,4 @@ pools, start and stop `zed`, and use `zinject`.
   `/var/tmp/g197`).
 
 `logs/` has the runs quoted in the issue: `master_*` on master 4542a317e and
-`244_*` on zfs-2.4.4, both debug builds in an Ubuntu 24.04 VM (Linux 6.8).
+`244_*` on zfs-2.4.4, and `pr19304_special2.log` on #19304's branch (ea401ee73), all debug builds in an Ubuntu 24.04 VM (Linux 6.8).
