@@ -1,0 +1,53 @@
+# special2 variant on fix-alloc-class-fallback-loop ea401ee73 (PR #19304: test 0e974a759 + fix, on master 4542a317e), debug build, without fix-degraded-single-vdev-gang
+2.4.99-1
+CAEC6F66AF474056EA8F7F1
+## run 1
+special+normal degraded      DEGRADED state: /var/tmp/g197/d0 /var/tmp/g197/d1  | L0 1600/1600 L1 2/2 L2 0/1 | vdev0=1600 
+   ganged: 4 in      2	 256K	  76K	 168K	  84K	 3.37	  0.08	    L1 ZFS plain file
+   ganged: 3.12K in  1.56K	 200M	 200M	 212M	 136K	 1.00	 99.65	    L0 ZFS plain file
+   ganged: 3.13K in  1.57K	 200M	 200M	 213M	 136K	 1.00	 99.73	ZFS plain file
+   alloc /var/tmp/g197/d0 217768 KiB
+   alloc /var/tmp/g197/d1 596 KiB
+kstats: gang_writes=1605
+rc=0 elapsed=2s
+## run 2
+special+normal degraded      DEGRADED state: /var/tmp/g197/d0 /var/tmp/g197/d1  | L0 1600/1600 L1 2/2 L2 0/1 | vdev0=1600 
+   ganged: 4 in      2	 256K	  76K	 168K	  84K	 3.37	  0.08	    L1 ZFS plain file
+   ganged: 3.12K in  1.56K	 200M	 200M	 212M	 136K	 1.00	 99.65	    L0 ZFS plain file
+   ganged: 3.13K in  1.57K	 200M	 200M	 213M	 136K	 1.00	 99.73	ZFS plain file
+   alloc /var/tmp/g197/d0 217768 KiB
+   alloc /var/tmp/g197/d1 596 KiB
+kstats: gang_writes=3210
+rc=0 elapsed=3s
+## run 3
+special+normal degraded      DEGRADED state: /var/tmp/g197/d0 /var/tmp/g197/d1  | L0 1600/1600 L1 2/2 L2 0/1 | vdev0=1600 
+   ganged: 4 in      2	 256K	  76K	 168K	  84K	 3.37	  0.08	    L1 ZFS plain file
+   ganged: 3.12K in  1.56K	 200M	 200M	 212M	 136K	 1.00	 99.65	    L0 ZFS plain file
+   ganged: 3.13K in  1.57K	 200M	 200M	 213M	 136K	 1.00	 99.73	ZFS plain file
+   alloc /var/tmp/g197/d0 217768 KiB
+   alloc /var/tmp/g197/d1 596 KiB
+kstats: gang_writes=4815
+rc=0 elapsed=3s
+L1/L2 DVAs of f (vdev0=normal d0, vdev1=special d1):
+  L2 1:20054000:1000 20000L/1000P
+  L1 0:13abb000:d000G 20000L/c000P
+  L1 0:14e66000:8000G 20000L/7000P
+metadata blocks by vdev (zdb -ddddd of the whole fs objset, all objects incl. the meta-dnode; G = ganged):
+  L0 vdev0G 1600
+  L0 vdev1 6
+  L1 vdev0G 2
+  L1 vdev1 1
+  L2 vdev1 2
+  L3 vdev1 1
+  L4 vdev1 1
+  L5 vdev1 1
+## summary
+No hang in 3/3 runs (each finished in seconds; master and 2.4.4 hang with
+z_wr_iss spinning in zio_dva_allocate). Without the degraded-vdev fix the
+blocks are still ganged: L0 1600/1600 and L1 2/2 of the 200 MB file, gang
+headers and members on the degraded normal vdev d0 (217768 KiB there vs
+~204936 KiB without ganging). Metadata blocks <= 4K (spa_min_alloc: L2+,
+dnode blocks) get the try_hard pass in the special class and land
+unganged on the degraded special vdev d1 (596 KiB vs 560 KiB at creation);
+larger metadata (the L1s) fails in special and in normal and is ganged in
+the normal class.
