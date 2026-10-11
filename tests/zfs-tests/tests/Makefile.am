@@ -1707,6 +1707,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/failmode/failmode_dmu_tx_wait.ksh \
 	functional/failmode/failmode_dmu_tx_continue.ksh \
 	functional/failmode/failmode_fsync_wait.ksh \
+	functional/failmode/failmode_history_wait.ksh \
 	functional/failmode/failmode_fsync_continue.ksh \
 	functional/failmode/failmode_msync_wait.ksh \
 	functional/failmode/failmode_msync_continue.ksh \
