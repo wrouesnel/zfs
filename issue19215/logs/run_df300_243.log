@@ -1,0 +1,6 @@
+mode=df expire=300 wait=900 poll=60
+RESULT mode=df expire=300 waited=900 still_mounted=1
+1361.365887: z_zfsctl_snapshot_unmount_delay: df-2823
+1541.380876: z_zfsctl_snapshot_unmount_delay: df-2934
+1721.395734: z_zfsctl_snapshot_unmount_delay: df-3046
+1901.409198: z_zfsctl_snapshot_unmount_delay: df-3156

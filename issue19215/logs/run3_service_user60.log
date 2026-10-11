@@ -1,0 +1,7 @@
+copied 500 files; how=user expire=60 wait=150
+RESULT how=user expire=60 waited=150 still_mounted=0
+re-arm/unmount callers (count comm event):
+      1 spl_delay_taskq z_zfsctl_snapshot_unmount:
+      1 umount z_zfsctl_snapshot_unmount_delay:
+ spl_delay_taskq-2329    [002] .....   912.589926: z_zfsctl_snapshot_unmount: (zfsctl_snapshot_unmount+0x4/0x280 [zfs])
+          umount-2410    [003] .....   912.591833: z_zfsctl_snapshot_unmount_delay: (zfsctl_snapshot_unmount_delay+0x4/0xe0 [zfs])
