@@ -2339,6 +2339,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/snapdir/snapdir_mount_expire_busy.ksh \
 	functional/snapdir/snapdir_mount_expire_idle.ksh \
 	functional/snapdir/snapdir_mount_expire_move.ksh \
+	functional/snapdir/snapdir_mount_expire_stat.ksh \
 	functional/snapdir/snapdir_mount_fd_hold.ksh \
 	functional/snapdir/snapdir_mount_foreign.ksh \
 	functional/snapdir/snapdir_mount_move.ksh \
