@@ -1,0 +1,18 @@
+cmd=df n=5 poll=60: 5 snapshots mounted at t=0, expire=300
+t=600 mounted=5 (expire=300, held 600 s)
+t=645 mounted=0 (45 s after expire=30)
+t=690 mounted=0 (90 s after expire=30)
+t=780 mounted=0 (180 s after expire=30)
+t=900 mounted=0 (300 s after expire=30)
+cmd=stat n=5 poll=60: 5 snapshots mounted at t=0, expire=300
+t=600 mounted=5 (expire=300, held 600 s)
+t=645 mounted=0 (45 s after expire=30)
+t=690 mounted=0 (90 s after expire=30)
+t=780 mounted=0 (180 s after expire=30)
+t=900 mounted=0 (300 s after expire=30)
+cmd=mount n=5 poll=60: 5 snapshots mounted at t=0, expire=300
+t=600 mounted=0 (expire=300, held 600 s)
+t=645 mounted=0 (45 s after expire=30)
+t=690 mounted=0 (90 s after expire=30)
+t=780 mounted=0 (180 s after expire=30)
+t=900 mounted=0 (300 s after expire=30)

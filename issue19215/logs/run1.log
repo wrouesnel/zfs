@@ -1,0 +1,15 @@
+mode=quiet expire=30 wait=100 poll=10
+RESULT mode=quiet expire=30 waited=100 still_mounted=0
+95.444551: z_zfsctl_snapshot_unmount: spl_delay_taskq-538
+95.447436: z_zfsctl_snapshot_unmount_delay: umount-1304
+./repro.sh: line 30: /sys/kernel/tracing/kprobe_events: Device or resource busy
+mode=mountinfo expire=30 wait=100 poll=10
+RESULT mode=mountinfo expire=30 waited=100 still_mounted=0
+203.989810: z_zfsctl_snapshot_unmount: spl_delay_taskq-538
+203.992273: z_zfsctl_snapshot_unmount_delay: umount-1450
+mode=df expire=30 wait=100 poll=10
+RESULT mode=df expire=30 waited=100 still_mounted=1
+292.446427: z_zfsctl_snapshot_unmount_delay: df-1534
+312.458808: z_zfsctl_snapshot_unmount_delay: df-1542
+332.468795: z_zfsctl_snapshot_unmount_delay: df-1548
+352.480158: z_zfsctl_snapshot_unmount_delay: df-1554

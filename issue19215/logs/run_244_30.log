@@ -1,0 +1,22 @@
+RESULT mode=quiet expire=30 waited=100 still_mounted=0 mntid_start=227 mntid_end=
+18.109409: z_zpl_snapdir_automount: bash-853
+48.499572: z_zfsctl_snapshot_unmount: spl_delay_taskq-528
+48.502422: z_zfsctl_snapshot_unmount_delay: umount-1065
+RESULT mode=df expire=30 waited=100 still_mounted=1 mntid_start=227 mntid_end=227
+118.212984: z_zpl_snapdir_automount: bash-1097
+138.265365: z_zfsctl_snapshot_unmount_delay: df-1152
+158.283751: z_zfsctl_snapshot_unmount_delay: df-1158
+178.298671: z_zfsctl_snapshot_unmount_delay: df-1164
+198.311043: z_zfsctl_snapshot_unmount_delay: df-1170
+RESULT mode=stat expire=30 waited=100 still_mounted=1 mntid_start=227 mntid_end=227
+218.800340: z_zpl_snapdir_automount: bash-1193
+238.838886: z_zfsctl_snapshot_unmount_delay: stat-1249
+258.851285: z_zfsctl_snapshot_unmount_delay: stat-1255
+278.865401: z_zfsctl_snapshot_unmount_delay: stat-1261
+298.880173: z_zfsctl_snapshot_unmount_delay: stat-1267
+RESULT mode=read expire=30 waited=100 still_mounted=1 mntid_start=227 mntid_end=227
+319.322520: z_zpl_snapdir_automount: bash-1292
+339.357242: z_zfsctl_snapshot_unmount_delay: cat-1343
+359.372796: z_zfsctl_snapshot_unmount_delay: cat-1349
+379.387780: z_zfsctl_snapshot_unmount_delay: cat-1355
+399.398188: z_zfsctl_snapshot_unmount_delay: cat-1361

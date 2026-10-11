@@ -1,0 +1,8 @@
+2026/10/11 11:27:55 NOTICE: Config file "/root/.config/rclone/rclone.conf" not found - using defaults
+copied 500 files; how=shell expire=300 wait=420
+RESULT how=shell expire=300 waited=420 still_mounted=0
+re-arm/unmount callers (count comm event):
+      1 spl_delay_taskq z_zfsctl_snapshot_unmount:
+      1 umount z_zfsctl_snapshot_unmount_delay:
+ spl_delay_taskq-538     [003] .....   726.223873: z_zfsctl_snapshot_unmount: (zfsctl_snapshot_unmount+0x4/0x280 [zfs])
+          umount-2330    [001] .....   726.228846: z_zfsctl_snapshot_unmount_delay: (zfsctl_snapshot_unmount_delay+0x4/0xe0 [zfs])

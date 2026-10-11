@@ -1,0 +1,30 @@
++ chmod 777 /srv/rclone-dst
++ case $HOW in
++ systemd-run --wait --quiet -p PrivateTmp=yes -p ProtectSystem=strict -p PrivateMounts=yes -p ReadWritePaths=/srv/rclone-dst rclone --config /dev/null copy /r19215/data/.zfs/snapshot/daily-1791718657 /srv/rclone-dst
+++ find /srv/rclone-dst -type f
+++ wc -l
++ echo 'copied 500 files; how=service expire=60 wait=150'
+copied 500 files; how=service expire=60 wait=150
+++ date +%s
++ t0=1791718658
++ sleep 150
+++ grep -c ' r19215/data@daily-1791718657 ' /proc/self/mountinfo
+++ true
++ n=0
+++ date +%s
++ echo 'RESULT how=service expire=60 waited=150 still_mounted=0'
+RESULT how=service expire=60 waited=150 still_mounted=0
++ echo 're-arm/unmount callers (count comm event):'
+re-arm/unmount callers (count comm event):
++ grep z_zfsctl /sys/kernel/tracing/trace
++ awk '{print $1, $5}'
++ sed 's/-[0-9]* / /'
++ sort
++ uniq -c
+      1 spl_delay_taskq z_zfsctl_snapshot_unmount:
+      1 umount z_zfsctl_snapshot_unmount_delay:
++ grep z_zfsctl /sys/kernel/tracing/trace
++ tail -8
+ spl_delay_taskq-538     [003] .....  1068.237717: z_zfsctl_snapshot_unmount: (zfsctl_snapshot_unmount+0x4/0x280 [zfs])
+          umount-2486    [000] .....  1068.240495: z_zfsctl_snapshot_unmount_delay: (zfsctl_snapshot_unmount_delay+0x4/0xe0 [zfs])
++ echo 0

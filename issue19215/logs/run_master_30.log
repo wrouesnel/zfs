@@ -1,0 +1,5 @@
+RESULT mode=quiet expire=30 waited=100 still_mounted=0 mntid_start=372 mntid_end=
+RESULT mode=mountinfo expire=30 waited=100 still_mounted=0 mntid_start=372 mntid_end=
+RESULT mode=df expire=30 waited=100 still_mounted=1 mntid_start=372 mntid_end=372
+RESULT mode=stat expire=30 waited=101 still_mounted=1 mntid_start=372 mntid_end=372
+RESULT mode=statf expire=30 waited=100 still_mounted=1 mntid_start=372 mntid_end=372
