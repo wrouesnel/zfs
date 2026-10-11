@@ -1,0 +1,41 @@
+txg_sync 10041
+[<0>] __cv_timedwait_common+0x1b4/0x300 [spl]
+[<0>] __cv_timedwait_io+0x19/0x30 [spl]
+[<0>] zio_wait+0x338/0x5c0 [zfs]
+[<0>] dsl_pool_sync+0xd1/0x6c0 [zfs]
+[<0>] spa_sync_iterate_to_convergence+0xda/0x330 [zfs]
+[<0>] spa_sync+0x253/0x6d0 [zfs]
+[<0>] txg_sync_thread+0x295/0x3e0 [zfs]
+[<0>] thread_generic_wrapper+0x68/0x80 [spl]
+[<0>] kthread+0xf2/0x120
+[<0>] ret_from_fork+0x47/0x70
+[<0>] ret_from_fork_asm+0x1b/0x30
+2 [kthreadd]
+711 /usr/sbin/fsidd
+10568 dd if=/dev/urandom of=/t197/fs/f bs=1M count=200 status=none
+[  694.603605] CPU: 2 PID: 10050 Comm: z_wr_iss Tainted: P           OE      6.8.0-142-generic #142-Ubuntu
+[  694.603608] Hardware name: QEMU Ubuntu 24.04 PC (i440FX + PIIX, 1996), BIOS 1.16.3-debian-1.16.3-2 04/01/2014
+[  694.603609] RIP: 0010:zio_allocate_dispatch+0x8f/0x1d0 [zfs]
+[  694.603967] Code: 48 8d 75 cc 4c 89 e7 e8 df fd ff ff 4d 8b 85 e8 02 00 00 48 89 c3 4d 39 f0 0f 85 cf 00 00 00 4c 89 e7 e8 b4 d6 ff ff 4c 89 ff <e8> bc 22 e2 eb 4c 89 e7 e8 04 b2 e1 eb 4c 89 ff e8 ec 23 e2 eb 48
+[  694.603969] RSP: 0018:ffffd241c3cabcc8 EFLAGS: 00000246
+[  694.603971] RAX: 0000000000000000 RBX: 0000000000000000 RCX: 0000000000000000
+[  694.603972] RDX: 0000000000000000 RSI: 0000000000000000 RDI: ffff8cd4affc46e0
+[  694.603973] RBP: ffffd241c3cabd00 R08: ffff8cd4b0a3d280 R09: 0000000000000000
+[  694.603974] R10: 0000000000000000 R11: 0000000000000000 R12: ffff8cd4affc46c0
+[  694.603975] R13: ffff8cd4affc4400 R14: ffff8cd4b0a3d280 R15: ffff8cd4affc46e0
+[  694.603979] FS:  0000000000000000(0000) GS:ffff8cd4bbd00000(0000) knlGS:0000000000000000
+[  694.603980] CS:  0010 DS: 0000 ES: 0000 CR0: 0000000080050033
+[  694.603981] CR2: 00007edcd97fe000 CR3: 00000001023e8000 CR4: 0000000000750ef0
+[  694.603984] PKRU: 55555554
+[  694.603985] Call Trace:
+[  694.603986]  <TASK>
+[  694.603988]  zio_dva_allocate+0x4aa/0x820 [zfs]
+[  694.604147]  ? srso_alias_return_thunk+0x5/0xfbef5
+[  694.604152]  ? tsd_get+0x3d/0xb0 [spl]
+[  694.604167]  zio_execute+0x107/0x2c0 [zfs]
+[  694.604346]  taskq_thread+0x283/0x5d0 [spl]
+[  694.604363]  ? __pfx_default_wake_function+0x10/0x10
+[  694.604376]  ? __pfx_zio_execute+0x10/0x10 [zfs]
+[  694.604593]  ? __pfx_taskq_thread+0x10/0x10 [spl]
+[  694.604607]  kthread+0xf2/0x120
+[  694.604612]  ? __pfx_kthread+0x10/0x10

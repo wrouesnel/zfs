@@ -1,0 +1,11 @@
+2 disks, 1 degraded          DEGRADED state: /var/tmp/g197/d0   | L0 0/1600 L1 0/2 L2 0/1 | vdev1=1600 
+2 disks, both degraded       DEGRADED state: /var/tmp/g197/d0 /var/tmp/g197/d1  | L0 1600/1600 L1 2/2 L2 0/1 | vdev0=1233 vdev1=367 
+mirror, 1 child degraded     DEGRADED state: mirror-0 /var/tmp/g197/d0  | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+1 disk degraded, copies=2    DEGRADED state: /var/tmp/g197/d0   | L0 1600/1600 L1 2/2 L2 0/1 | vdev0=1600 
+raidz1, 1 child degraded     DEGRADED state: raidz1-0 /var/tmp/g197/d0  | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+special degraded             DEGRADED state: /var/tmp/g197/d1   | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+   alloc /var/tmp/g197/d0 204936 KiB
+   alloc /var/tmp/g197/d1 560 KiB
+special degr, small_blocks   DEGRADED state: /var/tmp/g197/d1   | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+   alloc /var/tmp/g197/d0 204936 KiB
+   alloc /var/tmp/g197/d1 560 KiB

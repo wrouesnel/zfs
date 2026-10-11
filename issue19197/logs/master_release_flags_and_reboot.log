@@ -1,0 +1,10 @@
+/dev/vdb: calling ioctl to re-read partition table: Success
+zfs_flags=0: L0 1600/1600 L1 2/2 L2 0/1  dbgmsg lines: 5 events: 0
+after VM reboot: DEGRADED too many errors
+after VM reboot: L0 1600/1600 L1 2/2 L2 0/1 
+zfs_flags=0 L0 1600/1600 L1 2/2 L2 0/1 ; dbgmsg:
+timestamp    message 
+1791716849   ffff8cd49c8ca940 dsl_scan.c:4027:dsl_process_async_destroys(): freed 1 blocks in 0ms from free_bpobj/bptree on t197 in txg 13; err=0
+1791716849   ffff8cd490cc8000 metaslab.c:2709:metaslab_load_impl(): metaslab_load: txg 13, spa t197, class normal, vdev_id 0, ms_id 12, smp_length 0, unflushed_allocs 0, unflushed_frees 0, freed 0, defer 0 + 0, unloaded time 44404 ms, loading_time 0 ms, ms_max_size 134217728, max size error 134217728, old_weight 6c0000000000001, new_weight 6c0000000000001
+1791716849   ffff8cd490cc8000 metaslab.c:2709:metaslab_load_impl(): metaslab_load: txg 13, spa t197, class normal, vdev_id 0, ms_id 13, smp_length 0, unflushed_allocs 0, unflushed_frees 0, freed 0, defer 0 + 0, unloaded time 44404 ms, loading_time 0 ms, ms_max_size 134217728, max size error 134217728, old_weight 6c0000000000001, new_weight 6c0000000000001
+1791716849   ffff8cd49c8ca940 dsl_scan.c:4027:dsl_process_async_destroys(): freed 1 blocks in 0ms from free_bpobj/bptree on t197 in txg 14; err=0

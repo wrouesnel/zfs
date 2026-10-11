@@ -1,0 +1,12 @@
+/dev/vdb: calling ioctl to re-read partition table: Success
+== pool: single leaf vdev /dev/vdb1, copies=1, ashift=12, compression=off
+copies	1 recordsize	128K redundant_metadata	all 
+== healthy write:   L0 0/1600 L1 0/2 L2 0/1 
+== vdev state: DEGRADED too many errors
+== after export/import: DEGRADED too many errors / label:  aux_state: 'err_exceeded'  degraded: 1 
+== degraded write:  L0 1600/1600 L1 2/2 L2 0/1 
+== before: zio_stats gang_writes=11228 gang_multilevel=0 metaslab_stats try_hard=23922
+== after:  zio_stats gang_writes=12832 gang_multilevel=0 metaslab_stats try_hard=27193
+== after zpool clear: ONLINE   
+== after clear:     L0 0/1600 L1 0/2 L2 0/1 
+RESULT: REPRODUCED (1600 L0 blocks ganged while DEGRADED)

@@ -1,0 +1,6 @@
+special degraded             DEGRADED state: /var/tmp/g197/d1   | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+   alloc /var/tmp/g197/d0 204936 KiB
+   alloc /var/tmp/g197/d1 560 KiB
+special degr, small_blocks   DEGRADED state: /var/tmp/g197/d1   | L0 0/1600 L1 0/2 L2 0/1 | vdev0=1600 
+   alloc /var/tmp/g197/d0 204936 KiB
+   alloc /var/tmp/g197/d1 572 KiB
