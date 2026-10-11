@@ -246,6 +246,13 @@
  * - z_snap_atime is updated in zfs_exit()->zfs_exit_fs() when a data access
  *   inside the snapshot completes.
  *
+ * A stat or statfs of the mountpoint itself updates neither: the path walk
+ * ends on the snapdir rather than crossing it, and zfs_getattr_fast() (for
+ * the snapshot root) and zfs_statvfs() use zfs_exit_noatime(). df(1),
+ * monitoring agents and desktop free-space checks do this to every mounted
+ * filesystem periodically, and would otherwise keep every automounted
+ * snapshot mounted forever.
+ *
  * The snapshot is considered "busy" if the most recent of these timestamps
  * is more recent than the expiry timout (zfs_expire_snapshot, 300s by
  * default). Tracking both is necessary as lookups do not imply data access

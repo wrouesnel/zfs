@@ -1795,6 +1795,12 @@ zfs_getattr_fast(zidmap_t *idmap, u32 request_mask, struct inode *ip,
 				sp->btime.tv_nsec = 0;
 			}
 #endif
+			/*
+			 * A stat of the mountpoint isn't use of the snapshot;
+			 * see "Mount expiry" in zfs_ctldir.c.
+			 */
+			zfs_exit_noatime(zfsvfs, FTAG);
+			return (0);
 		}
 	}
 

@@ -446,7 +446,12 @@ zpl_snapdir_revalidate(struct dentry *dentry, unsigned int flags)
 	if (dentry->d_inode) {
 		if (lookup_want_automount(flags))
 			SE_SET(se, SE_WANT_MOUNT);
-		atomic_store_64(&se->se_atime, jiffies);
+		/*
+		 * Only a walk that crosses into the snapshot is use of it, not
+		 * one that ends here; see "Mount expiry" in zfs_ctldir.c.
+		 */
+		if (flags & LOOKUP_PARENT)
+			atomic_store_64(&se->se_atime, jiffies);
 		return (1);
 	}
 
