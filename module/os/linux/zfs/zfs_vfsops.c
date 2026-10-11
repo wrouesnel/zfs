@@ -994,7 +994,7 @@ zfs_statvfs(struct inode *ip, struct kstatfs *statp)
 
 	if (zfsctl_is_snapdir(ip)) {
 		if ((err = zfsctl_snapdir_fsid(ip, &fsid)) != 0) {
-			zfs_exit(zfsvfs, FTAG);
+			zfs_exit_noatime(zfsvfs, FTAG);
 			return (err);
 		}
 	} else {
@@ -1059,7 +1059,11 @@ zfs_statvfs(struct inode *ip, struct kstatfs *statp)
 			err = zfs_statfs_project(zfsvfs, zp, statp, bshift);
 	}
 
-	zfs_exit(zfsvfs, FTAG);
+	/*
+	 * statfs isn't use of an automounted snapshot; see "Mount expiry"
+	 * in zfs_ctldir.c.
+	 */
+	zfs_exit_noatime(zfsvfs, FTAG);
 	return (err);
 }
 

@@ -93,6 +93,16 @@ zfs_exit(zfsvfs_t *zfsvfs, const char *tag)
 	ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
 }
 
+/*
+ * Like zfs_exit(), but the operation doesn't count as use of an automounted
+ * snapshot, so it doesn't defer its expiry (see zfs_exit_fs()).
+ */
+static inline void
+zfs_exit_noatime(zfsvfs_t *zfsvfs, const char *tag)
+{
+	ZFS_TEARDOWN_EXIT_READ(zfsvfs, tag);
+}
+
 static inline int
 zpl_enter(zfsvfs_t *zfsvfs, const char *tag)
 {
