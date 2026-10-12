@@ -150,9 +150,8 @@ log_mustnot user_run $other $changeflags rdonly $testfile
 log_must user_run $owner dosmode_readonly_write $testfile
 log_mustnot user_run $other $changeflags nordonly $testfile
 log_must hasflag rdonly $testfile
-if ! is_linux; then
-	log_mustnot user_run $owner "echo 'user write forbidden' >> $testfile"
-fi
+log_mustnot user_run $owner "echo 'user write forbidden' >> $testfile"
+log_mustnot user_run $owner "echo 'user write forbidden' > $testfile"
 log_must eval "echo 'root write allowed' >> $testfile"
 # We are still allowed to read and remove the file when READONLY is set.
 log_must user_run $owner cat $testfile
