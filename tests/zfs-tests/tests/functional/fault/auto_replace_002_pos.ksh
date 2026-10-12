@@ -107,9 +107,10 @@ log_note original vdev guid ${vdev_guid}
 # Auto-replace is opt-in so need to set property
 log_must zpool set autoreplace=on $TESTPOOL
 
-# Add some data to the pool
+# Add some data to the pool: 100 MiB of random data, which fits in the
+# raidz1 (its smallest device is the $SDSIZE MiB scsi_debug disk)
 log_must zfs create $TESTPOOL/fs
-log_must fill_fs /$TESTPOOL/fs 4 100 4096 512 R
+log_must fill_fs /$TESTPOOL/fs 4 100 4096 64 R
 log_must zpool export $TESTPOOL
 
 # Record the partition UUID for later comparison
