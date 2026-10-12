@@ -72,29 +72,40 @@ function verify_trim_io
 }
 
 #
-# Run N txgs which should be enough to trim the entire pool.
+# Sync txgs until every vdev's size on disk is at most size MB, or until the
+# timeout.  Automatic TRIM visits one group of metaslabs per pass and waits
+# several txgs after trimming each metaslab, so the number of txgs needed to
+# trim the whole pool depends on how many metaslabs held the freed data and
+# on how the TRIM thread's wakeups line up with the txg syncs.  The caller
+# checks the result with verify_vdevs.
 #
-function wait_trim_io # pool type txgs
+function wait_vdevs_trimmed # pool size vdevs
 {
-	typeset pool="${1-:$TESTPOOL}"
-	typeset type="${2-:ind}"
-	typeset txgs=${3:-10}
-	typeset timeout=120
+	typeset pool=$1
+	typeset tgt_size=$2
+	shift 2
+	typeset vdevs=$@
+	typeset timeout=300
 	typeset stop_time=$(( $(date +%s) + $timeout ))
+	typeset txgs=0
+	typeset vdev trimmed
 
-	typeset -i i=0
-	while [[ $i -lt $txgs ]]; do
-		if [ "$(date +%s)" -ge $stop_time ]; then
-			log_fail "Exceeded trim time limit of ${timeout}s"
-			return
-		fi
+	while [ "$(date +%s)" -lt $stop_time ]; do
+		trimmed=true
+		for vdev in $vdevs; do
+			if [[ $(get_size_mb $vdev) -gt $tgt_size ]]; then
+				trimmed=false
+				break
+			fi
+		done
+		$trimmed && break
 
-		sync_all_pools true
-		((i = i + 1))
+		zpool sync -f $pool || log_fail "zpool sync -f $pool failed"
+		((txgs = txgs + 1))
 	done
 
-	typeset ios=$(get_trim_io $pool $type)
-	log_note "Waited for $txgs txgs, $ios $type TRIM IOs"
+	typeset ios=$(get_trim_io $pool "ind")
+	log_note "Waited for $txgs txgs, $ios ind TRIM IOs"
 }
 
 #

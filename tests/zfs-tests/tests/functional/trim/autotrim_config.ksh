@@ -30,7 +30,7 @@
 #	3. Fill the pool to a known percentage of capacity.
 #	4. Verify the vdevs contain 75% or more allocated blocks.
 #	5. Remove all files making it possible to trim the entire pool.
-#	6. Wait for auto trim to issue trim IOs for the free blocks.
+#	6. Sync txgs until auto trim has trimmed the free blocks.
 #	7. Verify the disks contain 30% or less allocated blocks.
 #	8. Repeat for test for striped, mirrored, and RAIDZ pools.
 
@@ -104,7 +104,7 @@ for type in "" "mirror" "raidz2" "draid"; do
 
 	# Remove the file, wait for trim, verify the vdevs are now sparse.
 	log_must rm /$TESTPOOL/file
-	wait_trim_io $TESTPOOL "ind" 64
+	wait_vdevs_trimmed $TESTPOOL "$VDEV_MIN_MB" $VDEVS
 	verify_vdevs "-le" "$VDEV_MIN_MB" $VDEVS
 
 	log_must zpool destroy $TESTPOOL
