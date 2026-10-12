@@ -134,6 +134,23 @@ secpolicy_vnode_any_access(const cred_t *cr, struct inode *ip, uid_t owner)
 }
 
 /*
+ * Determine if subject may write to a file despite the DOS read-only
+ * attribute (ZFS_READONLY), which denies write access as if the ACL did
+ * not grant it: CAP_DAC_OVERRIDE, as for the mode bits.
+ */
+int
+secpolicy_vnode_write_override(const cred_t *cr, struct inode *ip)
+{
+#if defined(CONFIG_USER_NS)
+	if (!kuid_has_mapping(cr->user_ns, ip->i_uid) ||
+	    !kgid_has_mapping(cr->user_ns, ip->i_gid))
+		return (EPERM);
+#endif
+
+	return (priv_policy_user(cr, CAP_DAC_OVERRIDE, EPERM));
+}
+
+/*
  * Determine if subject can chown owner of a file.
  */
 int

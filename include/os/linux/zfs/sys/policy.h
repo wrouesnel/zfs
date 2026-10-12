@@ -34,6 +34,7 @@ int secpolicy_vnode_chown(const cred_t *, uid_t);
 int secpolicy_vnode_create_gid(const cred_t *);
 int secpolicy_vnode_remove(const cred_t *);
 int secpolicy_vnode_setdac(const cred_t *, uid_t);
+int secpolicy_vnode_write_override(const cred_t *, struct inode *);
 int secpolicy_vnode_setid_retain(struct znode *, const cred_t *, boolean_t);
 int secpolicy_vnode_setids_setgids(const cred_t *, gid_t, zidmap_t *,
     struct user_namespace *);

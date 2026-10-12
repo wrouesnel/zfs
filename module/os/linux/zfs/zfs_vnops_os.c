@@ -172,7 +172,6 @@
 int
 zfs_open(struct inode *ip, int mode, int flag, cred_t *cr)
 {
-	(void) cr;
 	znode_t	*zp = ITOZ(ip);
 	zfsvfs_t *zfsvfs = ITOZSB(ip);
 	int error;
@@ -183,6 +182,20 @@ zfs_open(struct inode *ip, int mode, int flag, cred_t *cr)
 	/* Honor ZFS_APPENDONLY file attribute */
 	if (blk_mode_is_open_write(mode) && (zp->z_pflags & ZFS_APPENDONLY) &&
 	    ((flag & O_APPEND) == 0)) {
+		zfs_exit(zfsvfs, FTAG);
+		return (SET_ERROR(EPERM));
+	}
+
+	/*
+	 * Honor the DOS read-only attribute (ZFS_READONLY) as if the ACL did
+	 * not grant write access, so a privileged caller may still write, as
+	 * on FreeBSD.  The VFS only checks the mode bits, and zfs_write()
+	 * deliberately lets the attribute through so that descriptors opened
+	 * before it was set stay writable, so the open is where it must be
+	 * enforced.  It is ignored for directories.
+	 */
+	if (blk_mode_is_open_write(mode) && (zp->z_pflags & ZFS_READONLY) &&
+	    !S_ISDIR(ip->i_mode) && secpolicy_vnode_write_override(cr, ip)) {
 		zfs_exit(zfsvfs, FTAG);
 		return (SET_ERROR(EPERM));
 	}
