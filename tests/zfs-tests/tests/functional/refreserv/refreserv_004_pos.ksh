@@ -65,15 +65,54 @@ for ds in $datasets; do
 	typeset -i avail
 	avail=$(get_prop avail $subfs)
 	log_must zfs set refreservation=$avail $subfs
+
+	#
+	# The parent is charged only for the part of the refreservation that
+	# exceeds what $subfs already references, so a little of its quota
+	# is still free.  The refreservation can grow by at most that much.
+	# The parent's used space can still move by a few KB while the
+	# property changes sync (seen on FreeBSD), so test the limit with a
+	# margin rather than to the byte.
+	#
+	typeset -i room exceed
+	((room = $(get_prop quota $ds) - $(get_prop used $ds)))
+	((exceed = avail + room + 1024 * 1024))
+	log_mustnot zfs set refreservation=$exceed $subfs
+
 	typeset mntpnt
 	mntpnt=$(get_prop mountpoint $subfs)
-	log_must mkfile $avail $mntpnt/$TESTFILE
 
-	typeset -i exceed
-	((exceed = avail + 1))
-	log_mustnot zfs set refreservation=$exceed $subfs
-	log_mustnot mkfile $avail $mntpnt/$TESTFILE
+	#
+	# The reserved space must be usable although the parent's quota is
+	# now fully reserved.  Write incompressible data: with the default
+	# compression mkfile's zeros become holes and use no space.  Write
+	# whole records and leave 1 MiB for metadata: a file of exactly
+	# $avail bytes ends in a partial record, but its last block is a full
+	# record, so with incompressible data it cannot fit.  Sync after each
+	# record: every write is checked against the quota with a worst-case
+	# estimate of its size, and so is all the data not yet synced, so
+	# writes that pile up in one txg can be refused well before the
+	# reservation is used (seen on FreeBSD and Linux).
+	#
+	typeset -i recsize fill i
+	recsize=$(get_prop recordsize $subfs)
+	((fill = (avail - 1024 * 1024) / recsize))
+	log_must touch $mntpnt/$TESTFILE
+	for ((i = 0; i < fill; i++)); do
+		file_write -o append -f $mntpnt/$TESTFILE -b $recsize -c 1 \
+		    -d R || log_fail "write $i of $fill records failed"
+		sync_pool $pool
+	done
+	typeset -i refer=$(get_prop referenced $subfs)
+	((refer >= fill * recsize)) || \
+	    log_fail "referenced $refer < written $((fill * recsize))"
 
+	# What is left of the reservation cannot hold another $avail bytes.
+	log_mustnot file_write -o create -f $mntpnt/$TESTFILE.2 -b $recsize \
+	    -c $((avail / recsize + 1)) -d R
+
+	log_must rm -f $mntpnt/$TESTFILE $mntpnt/$TESTFILE.2
+	sync_all_pools true
 	log_must zfs set quota=none $ds
 	log_must zfs set reservation=15M $ds
 done
