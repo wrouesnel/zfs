@@ -231,6 +231,8 @@ maybe = {
     'cli_root/zpool_import/import_rewind_device_replaced':
         ['FAIL', rewind_reason],
     'crtime/crtime_001_pos': ['SKIP', statx_reason],
+    'cli_root/zfs_load-key/zfs_load-key_initramfs':
+        ['SKIP', 'initramfs-tools might be not available'],
     'cli_root/zfs_share/zfs_share_concurrent_shares': ['FAIL', known_reason],
     'cli_root/zfs_unshare/zfs_unshare_006_pos': ['SKIP', na_reason],
     'cli_root/zpool_import/import_devices_missing': ['FAIL', 16669],

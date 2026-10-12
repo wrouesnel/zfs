@@ -56,6 +56,10 @@ tags = ['functional', 'chattr']
 tests = ['zfs_003_neg']
 tags = ['functional', 'cli_root', 'zfs']
 
+[tests/functional/cli_root/zfs_load-key:Linux]
+tests = ['zfs_load-key_initramfs']
+tags = ['functional', 'cli_root', 'zfs_load-key']
+
 [tests/functional/cli_root/zfs_mount:Linux]
 tests = ['zfs_mount_006_pos', 'zfs_mount_008_pos', 'zfs_mount_013_pos',
     'zfs_mount_014_neg', 'zfs_multi_mount']
