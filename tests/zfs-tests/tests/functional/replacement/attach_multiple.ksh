@@ -32,8 +32,7 @@
 #    b. Attach a vdev to convert the pool to a 3-way mirror.
 #    c. Verify the original vdev cannot be removed (no redundant copies)
 #    d. Detach a vdev.  Healing and sequential resilver remain running.
-#    e. Detach a vdev.  Healing resilver remains running, sequential
-#       resilver is canceled.
+#    e. Detach a vdev.  Healing and sequential resilver are canceled.
 #    f. Wait for resilver to complete.
 #
 
@@ -88,21 +87,17 @@ for replace_mode in "healing" "sequential"; do
 	log_must is_pool_resilvering $TESTPOOL1
 
 	#
-	# Detach second vdev.  There's a difference in behavior between
-	# healing and sequential resilvers.  A healing resilver will not be
-	# cancelled even though there's nothing on the original vdev which
-	# needs to be rebuilt.  A sequential resilver on the otherhand is
-	# canceled when returning to a non-redundant striped layout.  At
-	# some point the healing resilver behavior should be updated to match
-	# the sequential resilver behavior.
+	# Detach second vdev.  Nothing on the original vdev needs to be
+	# rebuilt, so both a healing resilver and a sequential resilver are
+	# cancelled when returning to a non-redundant striped layout.
 	#
 	log_must zpool detach $TESTPOOL1 ${VDEV_FILES[2]}
-
-        if [[ "$replace_mode" = "healing" ]]; then
-		log_must is_pool_resilvering $TESTPOOL1
-        else
-		log_mustnot is_pool_resilvering $TESTPOOL1
-        fi
+	typeset -i i=0
+	while is_pool_resilvering $TESTPOOL1 && (( i < 30 )); do
+		sleep 1
+		(( i += 1 ))
+	done
+	log_mustnot is_pool_resilvering $TESTPOOL1
 
 	log_must set_tunable32 SCAN_SUSPEND_PROGRESS \
 	    $ORIG_SCAN_SUSPEND_PROGRESS
