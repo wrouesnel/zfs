@@ -219,6 +219,8 @@ maybe = {
     'channel_program/lua_core/setup': ['SKIP', zcp_reason],
     'channel_program/synctask_core/setup': ['SKIP', zcp_reason],
     'crtime/crtime_001_pos': ['SKIP', statx_reason],
+    'cli_root/zfs_load-key/zfs_load-key_initramfs':
+        ['SKIP', 'initramfs-tools might be not available'],
     'cli_root/zfs_share/zfs_share_concurrent_shares': ['FAIL', known_reason],
     'cli_root/zfs_unshare/zfs_unshare_006_pos': ['SKIP', na_reason],
     'cli_root/zpool_import/import_devices_missing': ['FAIL', 16669],
