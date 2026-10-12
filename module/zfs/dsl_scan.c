@@ -3885,6 +3885,30 @@ dsl_errorscrub_active(dsl_scan_t *scn)
 	return (B_FALSE);
 }
 
+/*
+ * Returns B_TRUE if a leaf under vd still needs the running resilver: it is
+ * writeable, has missing data, and its resilver is not deferred.
+ */
+static boolean_t
+dsl_scan_resilver_target_exists(vdev_t *vd)
+{
+	boolean_t needed = B_FALSE;
+
+	if (vd->vdev_children == 0) {
+		if (vd->vdev_resilver_deferred || !vdev_writeable(vd))
+			return (B_FALSE);
+		mutex_enter(&vd->vdev_dtl_lock);
+		needed = !zfs_range_tree_is_empty(vd->vdev_dtl[DTL_MISSING]);
+		mutex_exit(&vd->vdev_dtl_lock);
+		return (needed);
+	}
+
+	for (int c = 0; c < vd->vdev_children && !needed; c++)
+		needed = dsl_scan_resilver_target_exists(vd->vdev_child[c]);
+
+	return (needed);
+}
+
 static boolean_t
 dsl_scan_check_deferred(vdev_t *vd)
 {
@@ -4610,6 +4634,29 @@ dsl_scan_sync(dsl_pool_t *dp, dmu_tx_t *tx)
 
 	if (!dsl_scan_is_running(scn) || dsl_scan_is_paused_scrub(scn))
 		return;
+
+	/*
+	 * A healing resilver whose devices were all detached (for example a
+	 * cancelled replace), or can no longer be written, has nothing left
+	 * to repair, and it can't be cancelled from userland.  End it rather
+	 * than reading the rest of the pool; dsl_scan_done() then starts any
+	 * deferred resilver.  Skip the check while a vdev state change (such
+	 * as a reopen, which closes the leaves for a moment) is in progress.
+	 */
+	if (DSL_SCAN_IS_RESILVER(scn) &&
+	    spa_config_tryenter(spa, SCL_STATE, FTAG, RW_READER)) {
+		boolean_t done =
+		    !dsl_scan_resilver_target_exists(spa->spa_root_vdev);
+		spa_config_exit(spa, SCL_STATE, FTAG);
+		if (done) {
+			zfs_dbgmsg("resilver on %s txg %llu has no target "
+			    "device left, ending it", spa->spa_name,
+			    (longlong_t)tx->tx_txg);
+			dsl_scan_done(scn, B_FALSE, tx);
+			dsl_scan_sync_state(scn, tx, SYNC_MANDATORY);
+			return;
+		}
+	}
 
 	/*
 	 * zfs_scan_suspend_progress can be set to disable scan progress.
