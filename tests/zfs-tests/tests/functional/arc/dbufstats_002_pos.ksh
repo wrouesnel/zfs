@@ -29,7 +29,7 @@
 # 4. Obtain the object ID using linux stat command
 # 5. Ensure that all dbufs are on the mru list in the ARC
 # 6. Generate another random file large enough to flush dbuf cache
-# 7. cat the first generated file
+# 7. Wait longer than ARC_MINTIME, then cat the first generated file
 # 8. Ensure that at least some dbufs moved to the mfu list in the ARC
 #
 
@@ -60,6 +60,13 @@ log_note "dbuf count is $dbuf, mru count is $mru, mfu count is $mfu"
 verify_ne "0" "$mru" "mru count"
 verify_eq "0" "$mfu" "mfu count"
 
+#
+# arc_access() promotes an MRU buffer to the MFU list only when the hit comes
+# more than ARC_MINTIME (62 ms) after the buffer's previous access, here the
+# write at the sync above.  Wait well past that so the read below promotes
+# the buffers regardless of how quickly the steps above ran.
+#
+log_must sleep 1
 log_must eval "cat $TESTDIR/file > /dev/null"
 log_must eval "kstat dbufs > $DBUFS_FILE"
 dbuf=$(dbufstat -bxn -i "$DBUFS_FILE" -F "object=$objid" | wc -l)
