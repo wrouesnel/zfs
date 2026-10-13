@@ -1577,10 +1577,8 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/compression/compress_003_pos.ksh \
 	functional/compression/compress_004_pos.ksh \
 	functional/compression/compress_zstd_bswap.ksh \
-	functional/compression/l2arc_compressed_arc_disabled.ksh \
 	functional/compression/l2arc_compressed_arc.ksh \
 	functional/compression/l2arc_encrypted.ksh \
-	functional/compression/l2arc_encrypted_no_compressed_arc.ksh \
 	functional/compression/setup.ksh \
 	functional/cp_files/cleanup.ksh \
 	functional/cp_files/cp_files_001_pos.ksh \
@@ -2230,7 +2228,6 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/rsend_031_pos.ksh \
 	functional/rsend/rsend-exclude_001_pos.ksh \
 	functional/rsend/rsend-exclude_002_pos.ksh \
-	functional/rsend/send-c_compressed_arc_disabled.ksh \
 	functional/rsend/send-c_embedded_blocks.ksh \
 	functional/rsend/send-c_incremental.ksh \
 	functional/rsend/send-c_longname.ksh \

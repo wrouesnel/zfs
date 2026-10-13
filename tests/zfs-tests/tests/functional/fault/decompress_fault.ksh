@@ -26,7 +26,10 @@
 # STRATEGY:
 # 1. Create an compressed dataset with a test file
 # 2. Inject decompression errors on the file 20% of the time
-# 3. Read the file to confirm that errors are handled correctly
+# 3. Read the file with Direct I/O to confirm that errors are handled
+#    correctly. The ARC caches blocks compressed and decompresses them
+#    outside the zio pipeline, so only reads that bypass the ARC decompress
+#    in the pipeline where the injection applies.
 # 4. Confirm that the decompression injection was added to the ZED logs
 #
 
@@ -34,7 +37,6 @@ log_assert "Testing that injected decompression errors are handled correctly"
 
 function cleanup
 {
-	log_must set_tunable64 COMPRESSED_ARC_ENABLED 1
 	log_must zinject -c all
 	default_cleanup_noexit
 }
@@ -42,7 +44,6 @@ function cleanup
 log_onexit cleanup
 
 default_mirror_setup_noexit $DISK1 $DISK2
-log_must set_tunable64 COMPRESSED_ARC_ENABLED 0
 log_must zfs create -o compression=on $TESTPOOL/fs
 mntpt=$(get_prop mountpoint $TESTPOOL/fs)
 write_compressible $mntpt 32m 1 1024k "testfile"
@@ -50,7 +51,7 @@ sync_all_pools
 log_must zfs umount $TESTPOOL/fs
 log_must zfs mount $TESTPOOL/fs
 log_must zinject -a -t data -e decompress -f 20 $mntpt/testfile.0
-log_mustnot eval "cat $mntpt/testfile.0 > /dev/null"
+log_mustnot eval "dd if=$mntpt/testfile.0 of=/dev/null bs=128k iflag=direct"
 if ! is_freebsd; then
 	# Events are not supported on FreeBSD
 	log_must eval "zpool events $TESTPOOL | grep -q 'data'"

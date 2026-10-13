@@ -635,14 +635,12 @@ typedef struct arc_stats {
 	kstat_named_t arcstat_size;
 	/*
 	 * Number of compressed bytes stored in the arc_buf_hdr_t's b_pabd.
-	 * Note that the compressed bytes may match the uncompressed bytes
-	 * if the block is either not compressed or compressed arc is disabled.
+	 * Note that the compressed bytes match the uncompressed bytes
+	 * if the block is not compressed.
 	 */
 	kstat_named_t arcstat_compressed_size;
 	/*
-	 * Uncompressed size of the data stored in b_pabd. If compressed
-	 * arc is disabled then this value will be identical to the stat
-	 * above.
+	 * Uncompressed size of the data stored in b_pabd.
 	 */
 	kstat_named_t arcstat_uncompressed_size;
 	/*

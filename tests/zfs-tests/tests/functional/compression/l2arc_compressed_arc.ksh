@@ -37,14 +37,13 @@ export DIRECT=0
 
 #
 # DESCRIPTION:
-#	System with compressed_arc disabled succeeds at reading from L2ARC
+#	System succeeds at reading compressed blocks from L2ARC
 #
 # STRATEGY:
-#	1. Enable compressed_arc.
-#	2. Create pool with a cache device and compression enabled.
-#	3. Read the number of L2ARC checksum failures.
-#	4. Create a random file in that pool and random read for 30 sec.
-#	5. Read the number of L2ARC checksum failures.
+#	1. Create pool with a cache device and compression enabled.
+#	2. Read the number of L2ARC checksum failures.
+#	3. Create a random file in that pool and random read for 30 sec.
+#	4. Read the number of L2ARC checksum failures.
 #
 
 verify_runnable "global"
@@ -53,20 +52,13 @@ command -v fio > /dev/null || log_unsupported "fio missing"
 
 log_assert "L2ARC with compressed_arc enabled succeeds."
 
-origin_carc_setting=$(get_tunable COMPRESSED_ARC_ENABLED)
-
 function cleanup
 {
 	if poolexists $TESTPOOL-l2arc ; then
 		destroy_pool $TESTPOOL-l2arc
 	fi
-
-	log_must set_tunable64 COMPRESSED_ARC_ENABLED $origin_carc_setting
 }
 log_onexit cleanup
-
-# Enable Compressed ARC so that in-ARC and on-disk will match
-log_must set_tunable64 COMPRESSED_ARC_ENABLED 1
 
 log_must rm -rf $VDIR
 log_must mkdir -p $VDIR

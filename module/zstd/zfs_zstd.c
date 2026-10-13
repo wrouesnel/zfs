@@ -530,9 +530,8 @@ zfs_zstd_compress_impl(void *s_start, void *d_start, size_t s_len, size_t d_len,
 	ASSERT3U(ZSTD_VERSION_NUMBER, <=, 0xFFFFFF);
 
 	/*
-	 * Encode the compression level as well. We may need to know the
-	 * original compression level if compressed_arc is disabled, to match
-	 * the compression settings to write this block to the L2ARC.
+	 * Encode the compression level as well, so the original compression
+	 * level is known when the block is read back.
 	 *
 	 * Encode the actual level, so if the enum changes in the future, we
 	 * will be compatible.

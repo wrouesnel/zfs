@@ -267,7 +267,6 @@ extern uint64_t metaslab_force_ganging;
 extern uint64_t metaslab_df_alloc_threshold;
 extern uint64_t zfs_deadman_synctime_ms;
 extern uint_t metaslab_preload_limit;
-extern int zfs_compressed_arc_enabled;
 extern int zfs_abd_scatter_enabled;
 extern uint_t dmu_object_alloc_chunk_shift;
 extern boolean_t zfs_force_some_double_word_sm_entries;
@@ -7678,12 +7677,6 @@ ztest_resume_thread(void *arg)
 		if (spa_suspended(spa))
 			ztest_resume(spa);
 		(void) poll(NULL, 0, 100);
-
-		/*
-		 * Periodically change the zfs_compressed_arc_enabled setting.
-		 */
-		if (ztest_random(10) == 0)
-			zfs_compressed_arc_enabled = ztest_random(2);
 
 		/*
 		 * Periodically change the zfs_abd_scatter_enabled setting.

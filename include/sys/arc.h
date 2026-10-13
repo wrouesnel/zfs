@@ -145,12 +145,6 @@ typedef enum arc_flags
 	ARC_FLAG_HAS_L1HDR		= 1 << 18,
 	ARC_FLAG_HAS_L2HDR		= 1 << 19,
 
-	/*
-	 * Indicates the arc_buf_hdr_t's b_pdata matches the on-disk data.
-	 * This allows the l2arc to use the blkptr's checksum to verify
-	 * the data without having to store the checksum in the hdr.
-	 */
-	ARC_FLAG_COMPRESSED_ARC		= 1 << 20,
 	ARC_FLAG_SHARED_DATA		= 1 << 21,
 
 	/*
