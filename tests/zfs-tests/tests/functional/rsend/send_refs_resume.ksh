@@ -77,7 +77,6 @@ log_must eval "zstream token $token | grep -qw refsok"
 log_must eval "zfs send -nvt $token 2>&1 | grep -qw refsok"
 
 log_must eval "zfs send -t $token >$stream.2"
-log_must stream_has_features $stream.2 fromsnap_refs resuming
 #
 # The cut is in f3's data, so the references of the copies that come after
 # f3 in object order are still to be sent.  Object numbers are allocated
@@ -92,6 +91,14 @@ done
 typeset -i resumed=$(stream_byref_records $stream.2)
 log_note "$resumed references in the resumed stream, $expected expected"
 log_must test $resumed -eq $expected
+if (( expected > 0 )); then
+	log_must stream_has_features $stream.2 fromsnap_refs resuming
+else
+	# A resumed send only scans what is still to be sent, and none of it
+	# uses the incremental source's blocks.
+	log_must stream_has_features $stream.2 resuming
+	log_mustnot stream_has_features $stream.2 fromsnap_refs
+fi
 log_must eval "zfs recv -su $recvfs <$stream.2"
 refs_cmp_snaps $sendfs $recvfs a b
 
