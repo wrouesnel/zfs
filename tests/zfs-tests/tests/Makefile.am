@@ -2079,6 +2079,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/redundancy/redundancy_raidz2.ksh \
 	functional/redundancy/redundancy_raidz3.ksh \
 	functional/redundancy/redundancy_raidz.ksh \
+	functional/redundancy/redundancy_scrub_heal.ksh \
 	functional/redundancy/redundancy_stripe.ksh \
 	functional/redundancy/setup.ksh \
 	functional/refquota/cleanup.ksh \
