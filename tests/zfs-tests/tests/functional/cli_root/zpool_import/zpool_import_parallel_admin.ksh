@@ -32,8 +32,10 @@
 #	1. Create 2 pools
 #	2. Export one of the pools
 #	4. Import the pool with an injected delay
-#	5. Execute some admin commands against both pools
-#	6. Verify that the admin commands to the non-imported pool don't stall
+#	5. Once the import is in that delay, execute some admin commands
+#	   against both pools
+#	6. Verify that the admin commands to the non-imported pool finished
+#	   while the import was still in progress
 #
 
 verify_runnable "global"
@@ -43,6 +45,35 @@ function cleanup
 	zinject -c all
 	destroy_pool $TESTPOOL1
 	destroy_pool $TESTPOOL2
+}
+
+#
+# Is the import of $TESTPOOL1 still in progress (with notes matching the
+# optional pattern)?  The pool is listed in the import_progress kstat until
+# its load, and so the injected delay, is over.  Only after that are
+# commands that wait for the import let through.
+#
+function importing
+{
+	typeset notes=$1
+
+	kstat import_progress | awk -v pool=$TESTPOOL1 -v notes="$notes" \
+	    '$5 == pool && $0 ~ notes { found = 1 } END { exit !found }'
+}
+
+#
+# Record how long a command took, and whether $TESTPOOL1 was still being
+# imported when it finished.
+#
+function record
+{
+	typeset file=$1
+	typeset msg=$2
+	typeset state="after"
+
+	importing && state="during"
+	echo $SECONDS $state > $file
+	echo "$msg in $SECONDS secs ($state the import of $TESTPOOL1)"
 }
 
 function pool_import
@@ -69,8 +100,7 @@ function pool_add_device
 	SECONDS=0
 	errmsg=$(zpool add $pool $devtype $device 2>&1 > /dev/null)
 	if [[ $? -eq 0 ]]; then
-		echo ${pool}: added $devtype vdev in $SECONDS secs
-		echo $SECONDS > ${DEVICE_DIR}/${pool}-add
+		record ${DEVICE_DIR}/${pool}-add "${pool}: added $devtype vdev"
 	else
 		echo ${pool}: add $devtype vdev failed ${errmsg}, in $SECONDS secs
 	fi
@@ -84,8 +114,7 @@ function pool_stats
 	SECONDS=0
 	errmsg=$(zpool $stats $pool 2>&1 > /dev/null)
 	if [[ $? -eq 0 ]]; then
-		echo ${pool}: $stats in $SECONDS secs
-		echo $SECONDS > ${DEVICE_DIR}/${pool}-${stats}
+		record ${DEVICE_DIR}/${pool}-${stats} "${pool}: $stats"
 	else
 		echo ${pool}: $stats failed ${errmsg}, in $SECONDS secs
 	fi
@@ -123,7 +152,14 @@ log_must zpool create $TESTPOOL2 $VDEV1
 log_must zinject -P import -s 10 $TESTPOOL1
 pool_import $DEVICE_DIR $TESTPOOL1 &
 
-sleep 2
+#
+# wait until the import is in the injected delay
+#
+typeset -i tries=0
+until importing "injecting"; do
+	(( tries++ < 100 )) || log_fail "$TESTPOOL1 import never reached its delay"
+	sleep 0.1
+done
 
 #
 # run some admin commands on the pools while the import is in progress
@@ -146,11 +182,15 @@ zpool history $TESTPOOL2
 log_must test "5" -lt $(<${DEVICE_DIR}/${TESTPOOL1}-import)
 
 #
-# verify that commands to second pool did not wait for import to finish
+# verify that commands to second pool did not wait for import to finish:
+# each one finished while the import was still in its delay.  A command
+# that waits for the import can only finish after it.
 #
-log_must test "2" -gt $(<${DEVICE_DIR}/${TESTPOOL2}-status)
-log_must test "2" -gt $(<${DEVICE_DIR}/${TESTPOOL2}-list)
-log_must test "2" -gt $(<${DEVICE_DIR}/${TESTPOOL2}-add)
+for cmd in status list add; do
+	read secs state < ${DEVICE_DIR}/${TESTPOOL2}-$cmd
+	[[ $state == "during" ]] || log_fail "zpool $cmd $TESTPOOL2" \
+	    "finished after $TESTPOOL1's import (in $secs secs)"
+done
 [[ -e ${DEVICE_DIR}/${TESTPOOL1}-create ]] && log_fail "unexpected pool create"
 
 log_pass "Simple admin commands to different pool not blocked by import"
