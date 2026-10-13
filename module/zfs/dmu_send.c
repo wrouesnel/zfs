@@ -123,6 +123,17 @@ static uint64_t zfs_send_refs_max_blocks = 1ULL << 20;
 static uint_t zfs_send_refs_wait = 0;
 
 /*
+ * Threads searching the fromsnap for --refs.  The search mostly waits on
+ * reads, so several threads, each walking its own ranges of objects, make
+ * it several times faster.  With 1 the fromsnap is walked in object
+ * order, by one thread.
+ */
+static uint_t zfs_send_refs_resolve_threads = 8;
+#define	REFS_RESOLVE_THREADS_MAX	64
+/* Ranges of objects per search thread, so that the threads keep busy. */
+#define	REFS_RESOLVE_CHUNKS_PER_THREAD	64
+
+/*
  * zfs send --delta: a changed block is sent as a patch against a similar
  * fromsnap block when the patch is at most this percentage of the size of
  * the WRITE record it replaces.
@@ -1912,6 +1923,9 @@ typedef struct refs_entry {
 	uint64_t	re_offset;
 } refs_entry_t;
 
+/* Entry locks, for the search threads to claim the entries they resolve. */
+#define	REFS_ENTRY_LOCKS	64
+
 typedef struct send_refs {
 	avl_tree_t	sr_index;
 	uint64_t	sr_fromtxg;
@@ -1952,10 +1966,41 @@ typedef struct send_refs {
 	kmutex_t	sr_lock;
 	kcondvar_t	sr_cv;
 	boolean_t	sr_done;
-	uint32_t	sr_cancel;
+	volatile uint32_t sr_cancel;
 	send_setup_check_t sr_bgcheck;
 	char		sr_name[ZFS_MAX_DATASET_NAME_LEN];
+	/*
+	 * The search is split into ranges (chunks) of the fromsnap's objects,
+	 * which the search threads take in turn until none are left or
+	 * sr_stop is set.  The counts of what is found are updated
+	 * atomically; an entry is claimed under its lock in sr_entry_locks.
+	 */
+	objset_t	*sr_ref_os;
+	uint64_t	sr_chunk_objs;
+	uint64_t	sr_nchunks;
+	uint64_t	sr_next_chunk;
+	uint_t		sr_running;	/* search threads still running */
+	/* Read without atomics: it is checked for every block pointer. */
+	volatile uint32_t sr_stop;
+	int		sr_error;	/* first error of a search thread */
+	kcondvar_t	sr_wcv;		/* signalled as search threads end */
+	kmutex_t	sr_note_lock;	/* logging the search's progress */
+	kmutex_t	sr_entry_locks[REFS_ENTRY_LOCKS];
 } send_refs_t;
+
+/*
+ * A search thread: the end of its current chunk, and the progress it has
+ * not yet added to the search's (see refs_resolver_flush()).
+ */
+typedef struct refs_resolver {
+	send_refs_t	*rr_sr;
+	uint64_t	rr_end;		/* first object after the chunk */
+	uint64_t	rr_done;	/* block pointers visited */
+	uint64_t	rr_bytes;	/* logical size of the data blocks */
+	uint64_t	rr_object;	/* where it is */
+} refs_resolver_t;
+
+#define	REFS_RESOLVER_FLUSH	4096	/* block pointers between flushes */
 
 /*
  * Where a block to reference is in the fromsnap, if it has been found.  The
@@ -2126,65 +2171,149 @@ refs_resolve_note(send_refs_t *sr, const char *event, uint64_t permille,
 	    (u_longlong_t)object);
 }
 
+/*
+ * Add what a search thread has walked to the search's progress, and log
+ * each tenth of the fromsnap walked.
+ */
+static void
+refs_resolver_flush(refs_resolver_t *rr)
+{
+	send_refs_t *sr = rr->rr_sr;
+	send_setup_check_t *ssc = sr->sr_check;
+
+	if (rr->rr_done == 0 && rr->rr_bytes == 0)
+		return;
+	atomic_add_64(&ssc->ssc_done, rr->rr_done);
+	if (ssc->ssc_dssp != NULL)
+		atomic_add_64(&ssc->ssc_dssp->dss_phase_done, rr->rr_done);
+	atomic_add_64(&ssc->ssc_bytes, rr->rr_bytes);
+	rr->rr_done = 0;
+	rr->rr_bytes = 0;
+	sr->sr_walk_object = rr->rr_object;
+
+	mutex_enter(&sr->sr_note_lock);
+	while (sr->sr_walk_mark < 10 && refs_permille(
+	    atomic_load_64(&ssc->ssc_bytes), ssc->ssc_bytes_total) >=
+	    sr->sr_walk_mark * 100) {
+		refs_resolve_note(sr, "walked", sr->sr_walk_mark * 100,
+		    rr->rr_object);
+		sr->sr_walk_mark++;
+	}
+	mutex_exit(&sr->sr_note_lock);
+}
+
+/*
+ * The first object that a block of the meta-dnode (a block of dnodes, or
+ * an indirect block over them) holds, or UINT64_MAX if it's out of range.
+ */
+static uint64_t
+refs_meta_first_object(const dnode_phys_t *mdn, const zbookmark_phys_t *zb)
+{
+	/* Both are in 512-byte units: dnodes per block of dnodes. */
+	uint64_t per_block = mdn->dn_datablkszsec;
+	int epbs = mdn->dn_indblkshift - SPA_BLKPTRSHIFT;
+	int shift = zb->zb_level * epbs;
+
+	if (zb->zb_level < 0 || shift >= 64 ||
+	    zb->zb_blkid > (UINT64_MAX >> shift) / MAX(per_block, 1))
+		return (UINT64_MAX);
+	return ((zb->zb_blkid << shift) * per_block);
+}
+
 static int
 refs_resolve_cb(spa_t *spa, zilog_t *zilog, const blkptr_t *bp,
     const zbookmark_phys_t *zb, const dnode_phys_t *dnp, void *arg)
 {
-	(void) spa, (void) zilog, (void) dnp;
-	send_refs_t *sr = arg;
-	send_setup_check_t *ssc = sr->sr_check;
-	int err;
+	(void) spa, (void) zilog;
+	refs_resolver_t *rr = arg;
+	send_refs_t *sr = rr->rr_sr;
 
-	if (sr->sr_background) {
-		/* The send's own checks are for its thread. */
-		if (atomic_cas_32(&sr->sr_cancel, 0, 0) != 0)
-			return (SET_ERROR(EINTR));
-	} else if ((err = send_setup_check(ssc)) != 0) {
-		return (err);
-	}
-	if (bp != NULL)
-		send_setup_progress(ssc, 1);
-	if (bp == NULL || !refs_zb_eligible(zb) || !refs_bp_eligible(bp))
+	if (sr->sr_stop != 0)
+		return (SET_ERROR(EINTR));
+	/*
+	 * Each object is visited at ZB_DNODE_LEVEL, with the block pointer of
+	 * its dnode's block, before its blocks are: the chunk ends at the
+	 * first object after it.
+	 */
+	if (zb->zb_level == ZB_DNODE_LEVEL) {
+		if (zb->zb_object != DMU_META_DNODE_OBJECT &&
+		    zb->zb_object >= rr->rr_end)
+			return (SET_ERROR(ERANGE));
 		return (0);
-
-	send_setup_bytes(ssc, BP_GET_LSIZE(bp), 0);
-	sr->sr_walk_object = zb->zb_object;
-	while (sr->sr_walk_mark < 10 && refs_permille(ssc->ssc_bytes,
-	    ssc->ssc_bytes_total) >= sr->sr_walk_mark * 100) {
-		refs_resolve_note(sr, "walked", sr->sr_walk_mark * 100,
-		    zb->zb_object);
-		sr->sr_walk_mark++;
 	}
+	/*
+	 * Past the last object there are no objects to end the chunk on, but
+	 * the meta-dnode's blocks (holes too) are still visited: end it at the
+	 * first of those beyond the chunk.
+	 */
+	if (zb->zb_object == DMU_META_DNODE_OBJECT && dnp != NULL &&
+	    zb->zb_level >= 0 && rr->rr_end != UINT64_MAX &&
+	    refs_meta_first_object(dnp, zb) >= rr->rr_end)
+		return (SET_ERROR(ERANGE));
+	if (bp == NULL)
+		return (0);
+	if (++rr->rr_done >= REFS_RESOLVER_FLUSH)
+		refs_resolver_flush(rr);
+	if (!refs_zb_eligible(zb) || !refs_bp_eligible(bp))
+		return (0);
+	rr->rr_bytes += BP_GET_LSIZE(bp);
+	rr->rr_object = zb->zb_object;
 
 	refs_entry_t search = { .re_dva = bp->blk_dva[0] };
 	refs_entry_t *re = avl_find(&sr->sr_index, &search, NULL);
-	if (re == NULL || re->re_object != REFS_UNRESOLVED ||
+	if (re == NULL || atomic_load_64(&re->re_object) != REFS_UNRESOLVED ||
 	    re->re_birth != BP_GET_PHYSICAL_BIRTH(bp))
 		return (0);
 
-	/* Every use of the block is the same size as the block. */
-	sr->sr_resolved_uses += re->re_offset;
-	sr->sr_resolved_use_bytes += re->re_offset * BP_GET_LSIZE(bp);
-	/* The stream may be reading the entry: publish the offset first. */
+	/*
+	 * Another search thread may find the block elsewhere in the fromsnap
+	 * at the same time, so claim the entry under its lock; and the stream
+	 * may be reading the entry, so publish the offset before the object.
+	 */
+	kmutex_t *lock = &sr->sr_entry_locks[
+	    ((uintptr_t)re / sizeof (*re)) % REFS_ENTRY_LOCKS];
+	mutex_enter(lock);
+	if (re->re_object != REFS_UNRESOLVED) {
+		mutex_exit(lock);
+		return (0);
+	}
+	uint64_t uses = re->re_offset;
 	re->re_offset = zb->zb_blkid * BP_GET_LSIZE(bp);
 	membar_producer();
 	atomic_store_64(&re->re_object, zb->zb_object);
-	sr->sr_resolved++;
-	while (sr->sr_use_mark < ARRAY_SIZE(refs_use_marks) &&
-	    refs_permille(sr->sr_resolved_use_bytes, sr->sr_use_bytes) >=
+	mutex_exit(lock);
+
+	/* Every use of the block is the same size as the block. */
+	atomic_add_64(&sr->sr_resolved_uses, uses);
+	uint64_t found = atomic_add_64_nv(&sr->sr_resolved_use_bytes,
+	    uses * BP_GET_LSIZE(bp));
+	uint64_t resolved = atomic_inc_64_nv(&sr->sr_resolved);
+	if (sr->sr_use_mark < ARRAY_SIZE(refs_use_marks) &&
+	    refs_permille(found, sr->sr_use_bytes) >=
 	    refs_use_marks[sr->sr_use_mark]) {
-		refs_resolve_note(sr, "found",
-		    refs_use_marks[sr->sr_use_mark], zb->zb_object);
-		sr->sr_use_mark++;
+		mutex_enter(&sr->sr_note_lock);
+		while (sr->sr_use_mark < ARRAY_SIZE(refs_use_marks) &&
+		    refs_permille(atomic_load_64(&sr->sr_resolved_use_bytes),
+		    sr->sr_use_bytes) >= refs_use_marks[sr->sr_use_mark]) {
+			refs_resolve_note(sr, "found",
+			    refs_use_marks[sr->sr_use_mark], zb->zb_object);
+			sr->sr_use_mark++;
+		}
+		mutex_exit(&sr->sr_note_lock);
 	}
 
-	/* Stop early once every candidate has a location... */
-	if (sr->sr_resolved == sr->sr_candidates)
+	/*
+	 * Stop early once every candidate has a location, or once enough of
+	 * the referenced data has one.
+	 */
+	if (resolved == sr->sr_candidates) {
+		atomic_swap_32(&sr->sr_stop, 1);
 		return (SET_ERROR(ERANGE));
-	/* ... or once enough of the referenced data has one. */
-	if (sr->sr_resolve_pct < 100 && sr->sr_resolved_use_bytes * 100 >=
-	    sr->sr_use_bytes * sr->sr_resolve_pct) {
+	}
+	if (sr->sr_resolve_pct < 100 &&
+	    found * 100 >= sr->sr_use_bytes * sr->sr_resolve_pct) {
 		sr->sr_stopped = B_TRUE;
+		atomic_swap_32(&sr->sr_stop, 1);
 		return (SET_ERROR(ERANGE));
 	}
 	return (0);
@@ -2202,6 +2331,10 @@ send_refs_destroy(send_refs_t *sr)
 	avl_destroy(&sr->sr_index);
 	mutex_destroy(&sr->sr_lock);
 	cv_destroy(&sr->sr_cv);
+	cv_destroy(&sr->sr_wcv);
+	mutex_destroy(&sr->sr_note_lock);
+	for (int i = 0; i < REFS_ENTRY_LOCKS; i++)
+		mutex_destroy(&sr->sr_entry_locks[i]);
 	kmem_free(sr, sizeof (*sr));
 }
 
@@ -2259,35 +2392,130 @@ refs_stats_record(send_refs_t *sr)
 }
 
 /*
+ * A search thread: take chunks of the fromsnap's objects and walk them,
+ * until none are left or the search stops.
+ */
+static void
+refs_resolve_worker(void *arg)
+{
+	send_refs_t *sr = arg;
+	refs_resolver_t rr = { .rr_sr = sr };
+	fstrans_cookie_t cookie = spl_fstrans_mark();
+	int err = 0;
+
+	while (sr->sr_stop == 0) {
+		uint64_t chunk = atomic_inc_64_nv(&sr->sr_next_chunk) - 1;
+		if (chunk >= sr->sr_nchunks)
+			break;
+		uint64_t start = chunk * sr->sr_chunk_objs;
+
+		rr.rr_end = start + sr->sr_chunk_objs;
+		if (start == 0) {
+			err = traverse_dataset(sr->sr_fromds,
+			    sr->sr_minbirth - 1,
+			    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA,
+			    refs_resolve_cb, &rr);
+		} else {
+			zbookmark_phys_t zb;
+
+			SET_BOOKMARK(&zb, sr->sr_fromds->ds_object, start, 0,
+			    0);
+			err = traverse_dataset_resume(sr->sr_fromds,
+			    sr->sr_minbirth - 1, &zb,
+			    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA,
+			    refs_resolve_cb, &rr);
+		}
+		/* The end of the chunk, or the search stopped. */
+		if (err == ERANGE || (err == EINTR &&
+		    sr->sr_stop != 0))
+			err = 0;
+		if (err != 0)
+			break;
+	}
+	refs_resolver_flush(&rr);
+
+	mutex_enter(&sr->sr_lock);
+	if (err != 0) {
+		if (sr->sr_error == 0)
+			sr->sr_error = err;
+		atomic_swap_32(&sr->sr_stop, 1);
+	}
+	sr->sr_running--;
+	cv_broadcast(&sr->sr_wcv);
+	mutex_exit(&sr->sr_lock);
+	spl_fstrans_unmark(cookie);
+}
+
+/*
  * Search the fromsnap for where the blocks to reference are, until all of
  * them are found, enough of the referenced data is (sr_resolve_pct), the
- * fromsnap is walked, or, if the stream is sent meanwhile, it ends.
+ * fromsnap is walked, or, if the stream is sent meanwhile, it ends.  The
+ * search threads only watch sr_stop; unless the stream is being sent, this
+ * thread is the send's, and checks for a signal or dead output meanwhile.
  */
 static int
 send_refs_resolve(send_refs_t *sr)
 {
 	send_setup_check_t *ssc = sr->sr_check;
 	dsl_dataset_t *fromds = sr->sr_fromds;
+	objset_t *os = sr->sr_ref_os;
 	boolean_t ended = B_FALSE;
+	uint_t threads = MAX(1, MIN(zfs_send_refs_resolve_threads,
+	    REFS_RESOLVE_THREADS_MAX));
+	uint64_t maxobj = DNODES_PER_BLOCK *
+	    (DMU_META_DNODE(os)->dn_maxblkid + 1);
 	int err;
+
+	/* One thread walks the fromsnap in one go, in object order. */
+	sr->sr_nchunks = (threads == 1) ? 1 :
+	    MIN(maxobj, (uint64_t)threads * REFS_RESOLVE_CHUNKS_PER_THREAD);
+	sr->sr_nchunks = MAX(sr->sr_nchunks, 1);
+	sr->sr_chunk_objs = (threads == 1) ? UINT64_MAX :
+	    (maxobj + sr->sr_nchunks - 1) / sr->sr_nchunks;
+	sr->sr_running = threads;
 
 	send_setup_bytes(ssc, 0,
 	    dsl_dataset_phys(fromds)->ds_uncompressed_bytes);
 	zfs_dbgmsg("send %s: refs resolve: searching the fromsnap%s for %llu "
 	    "blocks with %llu uses of %llu bytes, until %u%% of those bytes "
-	    "are found", ssc->ssc_name,
+	    "are found, with %u threads", ssc->ssc_name,
 	    sr->sr_background ? " while streaming" : "",
 	    (u_longlong_t)sr->sr_candidates, (u_longlong_t)sr->sr_uses,
-	    (u_longlong_t)sr->sr_use_bytes, sr->sr_resolve_pct);
-	err = traverse_dataset(fromds, sr->sr_minbirth - 1,
-	    TRAVERSE_PRE | TRAVERSE_PREFETCH_METADATA, refs_resolve_cb, sr);
-	if (err == ERANGE)
-		err = 0;
-	if (err == EINTR && sr->sr_background &&
-	    atomic_cas_32(&sr->sr_cancel, 0, 0) != 0) {
-		ended = B_TRUE;
-		err = 0;
+	    (u_longlong_t)sr->sr_use_bytes, sr->sr_resolve_pct, threads);
+
+	taskq_t *tq = taskq_create("send_refs_resolve", threads, minclsyspri,
+	    threads, INT_MAX, 0);
+	for (uint_t t = 0; t < threads; t++) {
+		if (taskq_dispatch(tq, refs_resolve_worker, sr, TQ_SLEEP) ==
+		    TASKQID_INVALID) {
+			mutex_enter(&sr->sr_lock);
+			sr->sr_running--;
+			mutex_exit(&sr->sr_lock);
+		}
 	}
+	mutex_enter(&sr->sr_lock);
+	while (sr->sr_running > 0) {
+		if (sr->sr_background) {
+			cv_wait(&sr->sr_wcv, &sr->sr_lock);
+			continue;
+		}
+		(void) cv_timedwait(&sr->sr_wcv, &sr->sr_lock,
+		    ddi_get_lbolt() + MSEC_TO_TICK(250));
+		mutex_exit(&sr->sr_lock);
+		if (send_setup_check(ssc) != 0)
+			atomic_swap_32(&sr->sr_stop, 1);
+		mutex_enter(&sr->sr_lock);
+	}
+	err = sr->sr_error;
+	mutex_exit(&sr->sr_lock);
+	taskq_destroy(tq);
+
+	if (err == 0 && !sr->sr_background && ssc->ssc_err != 0)
+		err = ssc->ssc_err;
+	if (err == 0 && sr->sr_background &&
+	    sr->sr_cancel != 0 &&
+	    sr->sr_resolved < sr->sr_candidates && !sr->sr_stopped)
+		ended = B_TRUE;
 	if (err == 0) {
 		refs_resolve_note(sr, ended ? "stream ended, found" :
 		    sr->sr_stopped ? "stopped at target, found" :
@@ -2338,6 +2566,7 @@ send_refs_stop(send_refs_t *sr)
 	if (!sr->sr_started)
 		return;
 	atomic_swap_32(&sr->sr_cancel, 1);
+	atomic_swap_32(&sr->sr_stop, 1);
 	mutex_enter(&sr->sr_lock);
 	while (!sr->sr_done)
 		cv_wait(&sr->sr_cv, &sr->sr_lock);
@@ -2368,7 +2597,12 @@ send_refs_build(dsl_dataset_t *to_ds, dsl_dataset_t *fromds,
 	    offsetof(refs_entry_t, re_node));
 	mutex_init(&sr->sr_lock, NULL, MUTEX_DEFAULT, NULL);
 	cv_init(&sr->sr_cv, NULL, CV_DEFAULT, NULL);
+	cv_init(&sr->sr_wcv, NULL, CV_DEFAULT, NULL);
+	mutex_init(&sr->sr_note_lock, NULL, MUTEX_DEFAULT, NULL);
+	for (int i = 0; i < REFS_ENTRY_LOCKS; i++)
+		mutex_init(&sr->sr_entry_locks[i], NULL, MUTEX_DEFAULT, NULL);
 	sr->sr_fromds = fromds;
+	sr->sr_ref_os = from_os;
 	sr->sr_fromtxg = fromtxg;
 	sr->sr_minbirth = UINT64_MAX;
 	sr->sr_obj = UINT64_MAX;
@@ -4636,6 +4870,9 @@ ZFS_MODULE_PARAM(zfs_send, zfs_send_, refs_max_blocks, U64, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, refs_wait, UINT, ZMOD_RW,
 	"Wait for the fromsnap search of --refs before sending the stream");
+
+ZFS_MODULE_PARAM(zfs_send, zfs_send_, refs_resolve_threads, UINT, ZMOD_RW,
+	"Threads searching the fromsnap for --refs");
 
 ZFS_MODULE_PARAM(zfs_send, zfs_send_, delta_max_pct, UINT, ZMOD_RW,
 	"Largest WRITE_DELTA patch, as a percentage of the WRITE it replaces");

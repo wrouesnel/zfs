@@ -2280,6 +2280,17 @@ kstat counts them.
 When set, the stream is only sent once the search has ended, so that every
 block that is found is sent as a reference.
 .
+.It Sy zfs_send_refs_resolve_threads Ns = Ns Sy 8 Pq uint
+Threads that
+.Nm zfs Cm send Fl -refs
+uses to search the incremental source for the blocks to reference, each
+walking its own ranges of objects (at most 64).
+The search mostly waits on reads, so more threads make it faster, at the cost
+of more concurrent reads.
+With
+.Sy 1 ,
+the source is walked in object order by one thread.
+.
 .It Sy zfs_send_unmodified_spill_blocks Ns = Ns Sy 1 Ns | Ns 0 Pq int
 Include unmodified spill blocks in the send stream.
 Under certain circumstances, previous versions of ZFS could incorrectly

@@ -58,6 +58,8 @@ function cleanup
 	datasetexists $recvfs && destroy_dataset $recvfs -r
 	datasetexists $recvfs2 && destroy_dataset $recvfs2 -r
 	[[ -n "$saved_dbgmsg" ]] && set_tunable32 DBGMSG_ENABLE $saved_dbgmsg
+	[[ -n "$saved_threads" ]] && \
+	    set_tunable32 SEND_REFS_RESOLVE_THREADS $saved_threads
 	rm -f $all $half $BACKDIR/refs_resolve_full
 }
 
@@ -80,6 +82,9 @@ log_onexit cleanup
 
 saved_dbgmsg=$(get_tunable DBGMSG_ENABLE)
 log_must set_tunable32 DBGMSG_ENABLE 1
+# Where the search stops depends on the order it finds the blocks in.
+saved_threads=$(get_tunable SEND_REFS_RESOLVE_THREADS)
+log_must set_tunable32 SEND_REFS_RESOLVE_THREADS 1
 
 log_must zfs create -o dedup=on -o recordsize=$REFS_RECSIZE $otherfs
 othermnt=$(get_prop mountpoint $otherfs)

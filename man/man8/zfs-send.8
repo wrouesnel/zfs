@@ -697,6 +697,9 @@ blocks beyond it are sent in full.
 It then searches the block pointers of the source for where those blocks are,
 which can take much longer than finding the changed blocks: the time depends on
 the size of the source, not of the changes.
+The search is shared among
+.Sy zfs_send_refs_resolve_threads
+threads.
 The stream is sent meanwhile, and a block that the stream reaches before it has
 been found is sent in full; set
 .Sy zfs_send_refs_wait
