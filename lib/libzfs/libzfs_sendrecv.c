@@ -5130,11 +5130,30 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 
 	if (err == 0 && snapprops_nvlist) {
 		zfs_cmd_t zc = {"\0"};
+		nvlist_t *errors = NULL;
 
 		(void) strlcpy(zc.zc_name, destsnap, sizeof (zc.zc_name));
 		zc.zc_cookie = B_TRUE; /* received */
 		zcmd_write_src_nvlist(hdl, &zc, snapprops_nvlist);
-		(void) zfs_ioctl(hdl, ZFS_IOC_SET_PROP, &zc);
+		zcmd_alloc_dst_nvlist(hdl, &zc, 0);
+		if (zfs_ioctl(hdl, ZFS_IOC_SET_PROP, &zc) != 0) {
+			int ioc_errno = errno;
+
+			/*
+			 * As before, a property that cannot be set does not
+			 * fail the receive.  Failing to set any of them, e.g.
+			 * because the pool was exported, does.
+			 */
+			if (!zc.zc_nvlist_dst_filled ||
+			    (zcmd_read_dst_nvlist(hdl, &zc, &errors) == 0 &&
+			    nvlist_empty(errors))) {
+				(void) zfs_standard_error_fmt(hdl, ioc_errno,
+				    "cannot receive properties on %s",
+				    destsnap);
+				err = -1;
+			}
+			nvlist_free(errors);
+		}
 		zcmd_free_nvlists(&zc);
 	}
 	if (err == 0 && snapholds_nvlist) {

@@ -5806,6 +5806,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, const char *origin,
 	boolean_t first_recvd_props = B_FALSE;
 	boolean_t tofs_was_redacted;
 	zfs_file_t *input_fp;
+	spa_t *spa;
 
 	*read_bytes = 0;
 	*errflags = 0;
@@ -5814,6 +5815,17 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, const char *origin,
 
 	if ((input_fp = zfs_file_get(input_fd)) == NULL)
 		return (SET_ERROR(EBADF));
+
+	/*
+	 * Hold the pool until we are done.  The dataset is owned only while
+	 * the stream is received; if that fails, we still have to restore
+	 * the original properties, and an export must not come in between.
+	 */
+	error = spa_open(tofs, &spa, FTAG);
+	if (error != 0) {
+		zfs_file_put(input_fp);
+		return (error);
+	}
 
 	noff = off = zfs_file_off(input_fp);
 	error = dmu_recv_begin(tofs, tosnap, begin_record, force, heal,
@@ -6029,8 +6041,9 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, const char *origin,
 			 * system, we can't clear the $hasrecvd flag.
 			 */
 			*errflags |= ZPROP_ERR_NORESTORE;
-		} else if (first_recvd_props) {
-			dsl_prop_unset_hasrecvd(tofs);
+		} else if (first_recvd_props &&
+		    dsl_prop_unset_hasrecvd(tofs) != 0) {
+			*errflags |= ZPROP_ERR_NORESTORE;
 		}
 
 		if (origrecvd == NULL && !drc.drc_newfs) {
@@ -6112,6 +6125,7 @@ zfs_ioc_recv_impl(char *tofs, char *tosnap, const char *origin,
 	}
 out:
 	zfs_file_put(input_fp);
+	spa_close(spa, FTAG);
 	nvlist_free(origrecvd);
 	nvlist_free(origprops);
 

@@ -1277,7 +1277,13 @@ dsl_prop_set_hasrecvd_impl(const char *dsname, zprop_source_t source)
 	spa_t *spa;
 	int error = 0;
 
-	VERIFY0(spa_open(dsname, &spa, FTAG));
+	/*
+	 * zfs_ioc_set_prop() holds no reference on the pool, so it can have
+	 * been exported or destroyed.
+	 */
+	error = spa_open(dsname, &spa, FTAG);
+	if (error != 0)
+		return (error);
 	version = spa_version(spa);
 	spa_close(spa, FTAG);
 
@@ -1301,11 +1307,11 @@ dsl_prop_set_hasrecvd(const char *dsname)
 	return (error);
 }
 
-void
+int
 dsl_prop_unset_hasrecvd(const char *dsname)
 {
 	dsl_prop_hasrecvd_suspend(dsname);
-	VERIFY0(dsl_prop_set_hasrecvd_impl(dsname, ZPROP_SRC_NONE));
+	return (dsl_prop_set_hasrecvd_impl(dsname, ZPROP_SRC_NONE));
 }
 
 int
