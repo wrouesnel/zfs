@@ -2483,6 +2483,12 @@ Setting this to
 .Sy 0
 restores the previous behavior of one sync per reallocated object.
 .
+.It Sy zfs_recv_hasrecvd_suspend Ns = Ns Sy 0 Pq uint
+Testing only: while this is non-zero,
+.Nm zfs Cm receive
+and setting received properties wait before marking a dataset as having
+received properties, or clearing that mark, until the value changes.
+.
 .It Sy zfs_recv_best_effort_corrective Ns = Ns Sy 0 Pq int
 When this variable is set to non-zero a corrective receive:
 .Bl -enum -compact -offset 4n -width "1."

@@ -1251,6 +1251,25 @@ dsl_prop_get_hasrecvd(const char *dsname)
 	    dsl_prop_get_integer(dsname, ZPROP_HAS_RECVD, &dummy, NULL));
 }
 
+/*
+ * Testing only: while this is nonzero, setting or clearing the $hasrecvd
+ * flag waits first, holding nothing, until the value changes.  The test
+ * suite uses it to export the pool at that point.
+ */
+static uint_t zfs_recv_hasrecvd_suspend = 0;
+
+static void
+dsl_prop_hasrecvd_suspend(const char *dsname)
+{
+	uint_t gen = zfs_recv_hasrecvd_suspend;
+
+	if (gen == 0)
+		return;
+	zfs_dbgmsg("hasrecvd suspended on %s", dsname);
+	while (zfs_recv_hasrecvd_suspend == gen)
+		delay(hz / 10);
+}
+
 static int
 dsl_prop_set_hasrecvd_impl(const char *dsname, zprop_source_t source)
 {
@@ -1275,6 +1294,8 @@ int
 dsl_prop_set_hasrecvd(const char *dsname)
 {
 	int error = 0;
+
+	dsl_prop_hasrecvd_suspend(dsname);
 	if (!dsl_prop_get_hasrecvd(dsname))
 		error = dsl_prop_set_hasrecvd_impl(dsname, ZPROP_SRC_LOCAL);
 	return (error);
@@ -1283,6 +1304,7 @@ dsl_prop_set_hasrecvd(const char *dsname)
 void
 dsl_prop_unset_hasrecvd(const char *dsname)
 {
+	dsl_prop_hasrecvd_suspend(dsname);
 	VERIFY0(dsl_prop_set_hasrecvd_impl(dsname, ZPROP_SRC_NONE));
 }
 
@@ -1371,3 +1393,6 @@ EXPORT_SYMBOL(dsl_prop_inherit);
 EXPORT_SYMBOL(dsl_prop_predict);
 EXPORT_SYMBOL(dsl_prop_nvlist_add_uint64);
 EXPORT_SYMBOL(dsl_prop_nvlist_add_string);
+
+ZFS_MODULE_PARAM(zfs_recv, zfs_recv_, hasrecvd_suspend, UINT, ZMOD_RW,
+	"Set to make receives wait before marking a dataset as received");
