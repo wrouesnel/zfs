@@ -111,6 +111,7 @@ typedef struct mirror_map {
 	boolean_t	mm_resilvering;
 	boolean_t	mm_rebuilding;
 	boolean_t	mm_root;
+	boolean_t	mm_stale;
 	mirror_child_t	mm_child[];
 } mirror_map_t;
 
@@ -627,6 +628,27 @@ vdev_mirror_io_start(zio_t *zio)
 			 */
 			boolean_t first = B_TRUE;
 
+			/*
+			 * A child whose DTL says it is missing this txg has
+			 * stale data, which a scrub would report as checksum
+			 * errors.  It is read here when the scrub is what
+			 * heals it: when a resilver is needed, a scrub covers
+			 * the DTL range (dsl_scan_setup_sync()), but the pool
+			 * is not resilvering.  As a resilver does, skip such
+			 * children while another child has the data, and
+			 * repair them in vdev_mirror_io_done().
+			 */
+			boolean_t skip_stale = B_FALSE;
+			for (c = 0; c < mm->mm_children && !mm->mm_root; c++) {
+				mc = &mm->mm_child[c];
+				if (vdev_mirror_child_readable(mc) &&
+				    !vdev_mirror_child_missing(mc,
+				    zio->io_txg, 1)) {
+					skip_stale = B_TRUE;
+					break;
+				}
+			}
+
 			if (mm->mm_children > 1)
 				zio_batch_create(zio);
 
@@ -638,6 +660,15 @@ vdev_mirror_io_start(zio_t *zio)
 					mc->mc_error = SET_ERROR(ENXIO);
 					mc->mc_tried = 1;
 					mc->mc_skipped = 1;
+					continue;
+				}
+
+				if (skip_stale && vdev_mirror_child_missing(mc,
+				    zio->io_txg, 1)) {
+					mc->mc_error = SET_ERROR(ESTALE);
+					mc->mc_tried = 1;
+					mc->mc_skipped = 1;
+					mm->mm_stale = B_TRUE;
 					continue;
 				}
 
@@ -888,7 +919,8 @@ vdev_mirror_io_done(zio_t *zio)
 	if (good_copies && spa_self_heal_allowed(zio->io_spa) &&
 	    (unexpected_errors ||
 	    (zio->io_flags & ZIO_FLAG_RESILVER) ||
-	    ((zio->io_flags & ZIO_FLAG_SCRUB) && mm->mm_resilvering))) {
+	    ((zio->io_flags & ZIO_FLAG_SCRUB) &&
+	    (mm->mm_resilvering || mm->mm_stale)))) {
 		/*
 		 * Use the good data we have in hand to repair damaged children.
 		 */
