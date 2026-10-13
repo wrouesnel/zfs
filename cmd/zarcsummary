@@ -224,7 +224,10 @@ def handle_Exception(ex_cls, ex, tb):
     if ex_cls is KeyboardInterrupt:
         sys.exit()
 
-    if ex_cls is BrokenPipeError:
+    # The reader went away.  A pipe gives EPIPE, but ksh's pipes are
+    # socketpairs, and a socket closed with output still unread is
+    # reset, so a write waiting for room in it gets ECONNRESET instead.
+    if ex_cls in (BrokenPipeError, ConnectionResetError):
         # It turns out that while sys.exit() triggers an exception
         # not handled message on Python 3.8+, os._exit() does not.
         os._exit(0)
