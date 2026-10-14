@@ -1219,6 +1219,26 @@ function is_shared_freebsd
 {
 	typeset fs=$1
 
+	#
+	# libzfs follows each change to the exports file with a SIGHUP
+	# to mountd(8).  A SIGHUP that arrives while mountd is reloading
+	# is held until no request is waiting (or for up to RELOADDELAY,
+	# 250 ms), and a request that is waiting then is answered from
+	# the old export list.  "zfs umount" sends two SIGHUPs in a row
+	# when the unmount fails and it shares the file system again,
+	# so a showmount right after it can find it unshared.
+	#
+	# If the exports file changed in the last second, ask once to
+	# wait out a reload in progress, then send no request for longer
+	# than RELOADDELAY so that mountd starts any reload it holds.
+	# The next answer comes from the current exports file.
+	#
+	typeset -i changed=$(stat_mtime /etc/zfs/exports 2>/dev/null)
+	if (( $(date +%s) - changed <= 1 )); then
+		showmount -E >/dev/null 2>&1
+		sleep 0.3
+	fi
+
 	pgrep -q mountd && showmount -E | grep -qx "$fs"
 }
 
