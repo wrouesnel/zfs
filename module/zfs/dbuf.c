@@ -1754,6 +1754,26 @@ dbuf_fix_old_data(dmu_buf_impl_t *db, uint64_t txg)
 	}
 }
 
+/*
+ * Record the caching hints of an access to the dbuf.  An access without
+ * DMU_UNCACHEDIO or DMU_KEEP_CACHING makes the dbuf cacheable again.
+ * DMU_PARTIAL_FIRST (or a prefetch) marks it partially accessed, which
+ * keeps it in the dbuf cache even if it is not cacheable, until an access
+ * that reaches the end of the block clears the mark.
+ */
+static void
+dbuf_update_caching(dmu_buf_impl_t *db, dmu_flags_t flags)
+{
+	ASSERT(MUTEX_HELD(&db->db_mtx));
+
+	if (!(flags & (DMU_UNCACHEDIO | DMU_KEEP_CACHING)))
+		db->db_pending_evict = B_FALSE;
+	if (flags & (DMU_PARTIAL_FIRST | DMU_IS_PREFETCH))
+		db->db_partial_read = B_TRUE;
+	else if (!(flags & (DMU_PARTIAL_MORE | DMU_KEEP_CACHING)))
+		db->db_partial_read = B_FALSE;
+}
+
 int
 dbuf_read(dmu_buf_impl_t *db, zio_t *pio, dmu_flags_t flags)
 {
@@ -1778,12 +1798,7 @@ dbuf_read(dmu_buf_impl_t *db, zio_t *pio, dmu_flags_t flags)
 	    (flags & DMU_READ_NO_PREFETCH) == 0;
 
 	mutex_enter(&db->db_mtx);
-	if (!(flags & (DMU_UNCACHEDIO | DMU_KEEP_CACHING)))
-		db->db_pending_evict = B_FALSE;
-	if (flags & (DMU_PARTIAL_FIRST | DMU_IS_PREFETCH))
-		db->db_partial_read = B_TRUE;
-	else if (!(flags & (DMU_PARTIAL_MORE | DMU_KEEP_CACHING)))
-		db->db_partial_read = B_FALSE;
+	dbuf_update_caching(db, flags);
 	miss = (db->db_state != DB_CACHED);
 
 	if (db->db_state == DB_READ || db->db_state == DB_FILL) {
@@ -2748,7 +2763,15 @@ dmu_buf_will_dirty_flags(dmu_buf_t *db_fake, dmu_tx_t *tx, dmu_flags_t flags)
 				 */
 				undirty = B_TRUE;
 			} else {
-				/* This dbuf is already dirty and cached. */
+				/*
+				 * This dbuf is already dirty and cached, so
+				 * there is nothing to read, but this access
+				 * still updates the caching hints, as in
+				 * dbuf_read().  For example, the write that
+				 * completes a block written in parts must
+				 * clear db_partial_read.
+				 */
+				dbuf_update_caching(db, flags);
 				dbuf_redirty(dr);
 				mutex_exit(&db->db_mtx);
 				return;
