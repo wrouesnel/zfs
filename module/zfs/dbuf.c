@@ -1759,7 +1759,8 @@ dbuf_fix_old_data(dmu_buf_impl_t *db, uint64_t txg)
  * DMU_UNCACHEDIO or DMU_KEEP_CACHING makes the dbuf cacheable again.
  * DMU_PARTIAL_FIRST (or a prefetch) marks it partially accessed, which
  * keeps it in the dbuf cache even if it is not cacheable, until an access
- * that reaches the end of the block clears the mark.
+ * that reaches the end of the block clears the mark.  An access with
+ * DMU_KEEP_CACHING, such as the ZIL copying written data, changes neither.
  */
 static void
 dbuf_update_caching(dmu_buf_impl_t *db, dmu_flags_t flags)
@@ -1768,7 +1769,9 @@ dbuf_update_caching(dmu_buf_impl_t *db, dmu_flags_t flags)
 
 	if (!(flags & (DMU_UNCACHEDIO | DMU_KEEP_CACHING)))
 		db->db_pending_evict = B_FALSE;
-	if (flags & (DMU_PARTIAL_FIRST | DMU_IS_PREFETCH))
+	if ((flags & DMU_IS_PREFETCH) ||
+	    (flags & (DMU_PARTIAL_FIRST | DMU_KEEP_CACHING)) ==
+	    DMU_PARTIAL_FIRST)
 		db->db_partial_read = B_TRUE;
 	else if (!(flags & (DMU_PARTIAL_MORE | DMU_KEEP_CACHING)))
 		db->db_partial_read = B_FALSE;
