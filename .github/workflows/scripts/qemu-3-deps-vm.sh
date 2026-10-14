@@ -300,6 +300,12 @@ case "$1" in
     sudo -E service nfsd enable
     sudo -E service qemu-guest-agent enable
     sudo -E service samba_server enable
+    # cron runs "periodic daily" at 03:01, whose security checks run
+    # find(1) with every mounted ufs and zfs file system as a root.  On
+    # FreeBSD 16, find opens all its root directories at the start, so
+    # the test pools stay busy for the whole run (half a minute or more)
+    # and "zpool export" fails.  Don't run periodic in the test VMs.
+    sudo -E sed -i '' -e '/[[:space:]]periodic[[:space:]]/s/^/#/' /etc/crontab
     ;;
   debian*|ubuntu*)
     sudo -E systemctl enable nfs-kernel-server
