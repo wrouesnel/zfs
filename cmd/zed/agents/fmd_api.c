@@ -29,7 +29,10 @@
 #include <sys/types.h>
 #include <sys/fm/protocol.h>
 #include <uuid/uuid.h>
+#include <errno.h>
+#include <pthread.h>
 #include <signal.h>
+#include <stddef.h>
 #include <string.h>
 #include <time.h>
 
@@ -538,30 +541,87 @@ fmd_serd_gc(fmd_hdl_t *hdl)
 
 /* FMD Timers */
 
+/*
+ * Module code is not thread safe: it assumes that only the agents thread
+ * runs it.  A timer expires on a thread of its own (SIGEV_THREAD), so the
+ * expiry is not delivered to the module from there.  _timer_notify() only
+ * posts an FMD_TIMER_EXPIRED_CLASS event carrying the timer's id, and the
+ * agents thread delivers it, in order with the other events, through
+ * fmd_timer_expired().  By then the module may have removed the timer and
+ * freed it, so the expiry is looked up by id among the installed timers and
+ * dropped if the timer is gone.  Nothing in this path reads the fmd_timer_t
+ * from the timer's own thread.
+ */
+static pthread_mutex_t fmd_timers_lock = PTHREAD_MUTEX_INITIALIZER;
+static list_t fmd_timers;
+static boolean_t fmd_timers_init = B_FALSE;
+static uintptr_t fmd_timers_next_id = 1;
+
 static void
 _timer_notify(union sigval sv)
 {
-	fmd_timer_t *ftp = sv.sival_ptr;
-	fmd_hdl_t *hdl = ftp->ft_hdl;
-	fmd_module_t *mp = (fmd_module_t *)hdl;
-	const fmd_hdl_ops_t *ops = mp->mod_info->fmdi_ops;
-	struct itimerspec its;
+	nvlist_t *nvl;
 
-	fmd_hdl_debug(hdl, "%s timer fired (%p)", mp->mod_name, ftp->ft_tid);
+	if (nvlist_alloc(&nvl, NV_UNIQUE_NAME, 0) != 0) {
+		zed_log_msg(LOG_ERR, "timer %llu expired: failed to xalloc "
+		    "event", (u_longlong_t)(uintptr_t)sv.sival_ptr);
+		return;
+	}
+	if (nvlist_add_string(nvl, FM_CLASS, FMD_TIMER_EXPIRED_CLASS) != 0 ||
+	    nvlist_add_uint64(nvl, FMD_TIMER_EXPIRED_ID,
+	    (uint64_t)(uintptr_t)sv.sival_ptr) != 0) {
+		zed_log_msg(LOG_ERR, "timer %llu expired: failed to populate "
+		    "event", (u_longlong_t)(uintptr_t)sv.sival_ptr);
+		nvlist_free(nvl);
+		return;
+	}
+	zfs_agent_post_event(FMD_TIMER_EXPIRED_CLASS, NULL, nvl);
+	nvlist_free(nvl);
+}
 
-	/* disarm the timer */
-	memset(&its, 0, sizeof (struct itimerspec));
-	timer_settime(ftp->ft_tid, 0, &its, NULL);
+/*
+ * Called on the agents thread for an FMD_TIMER_EXPIRED_CLASS event.
+ */
+void
+fmd_timer_expired(nvlist_t *nvl)
+{
+	const fmd_hdl_ops_t *ops;
+	fmd_module_t *mp;
+	fmd_timer_t *ftp;
+	uint64_t id;
+
+	if (nvlist_lookup_uint64(nvl, FMD_TIMER_EXPIRED_ID, &id) != 0)
+		return;
+
+	(void) pthread_mutex_lock(&fmd_timers_lock);
+	for (ftp = fmd_timers_init ? list_head(&fmd_timers) : NULL;
+	    ftp != NULL; ftp = list_next(&fmd_timers, ftp)) {
+		if (ftp->ft_id == (uintptr_t)id)
+			break;
+	}
+	(void) pthread_mutex_unlock(&fmd_timers_lock);
+
+	if (ftp == NULL) {
+		zed_log_msg(LOG_INFO, "ignoring expiry of removed timer %llu",
+		    (u_longlong_t)id);
+		return;
+	}
+
+	mp = (fmd_module_t *)ftp->ft_hdl;
+	ops = mp->mod_info->fmdi_ops;
+
+	fmd_hdl_debug(ftp->ft_hdl, "%s timer fired (%p)", mp->mod_name,
+	    ftp->ft_tid);
 
 	/* Note that the fmdo_timeout can remove this timer */
 	if (ops->fmdo_timeout != NULL)
-		ops->fmdo_timeout(hdl, ftp, ftp->ft_arg);
+		ops->fmdo_timeout(ftp->ft_hdl, ftp, ftp->ft_arg);
 }
 
 /*
  * Install a new timer which will fire at least delta nanoseconds after the
  * current time. After the timeout has expired, the module's fmdo_timeout
- * entry point is called.
+ * entry point is called, once, from the agents thread.
  */
 fmd_timer_t *
 fmd_timer_install(fmd_hdl_t *hdl, void *arg, fmd_event_t *ep, hrtime_t delta)
@@ -571,23 +631,43 @@ fmd_timer_install(fmd_hdl_t *hdl, void *arg, fmd_event_t *ep, hrtime_t delta)
 	struct itimerspec its;
 	fmd_timer_t *ftp;
 
-	ftp = fmd_hdl_alloc(hdl, sizeof (fmd_timer_t), FMD_SLEEP);
+	ftp = fmd_hdl_zalloc(hdl, sizeof (fmd_timer_t), FMD_SLEEP);
 	ftp->ft_arg = arg;
 	ftp->ft_hdl = hdl;
 
+	(void) pthread_mutex_lock(&fmd_timers_lock);
+	if (!fmd_timers_init) {
+		list_create(&fmd_timers, sizeof (fmd_timer_t),
+		    offsetof(fmd_timer_t, ft_node));
+		fmd_timers_init = B_TRUE;
+	}
+	ftp->ft_id = fmd_timers_next_id++;
+	if (fmd_timers_next_id == 0)
+		fmd_timers_next_id = 1;
+	list_insert_tail(&fmd_timers, ftp);
+	(void) pthread_mutex_unlock(&fmd_timers_lock);
+
+	/* one-shot: no it_interval */
+	memset(&its, 0, sizeof (its));
 	its.it_value.tv_sec = delta / 1000000000;
 	its.it_value.tv_nsec = delta % 1000000000;
-	its.it_interval.tv_sec = its.it_value.tv_sec;
-	its.it_interval.tv_nsec = its.it_value.tv_nsec;
 
+	memset(&sev, 0, sizeof (sev));
 	sev.sigev_notify = SIGEV_THREAD;
 	sev.sigev_notify_function = _timer_notify;
 	sev.sigev_notify_attributes = NULL;
-	sev.sigev_value.sival_ptr = ftp;
-	sev.sigev_signo = 0;
+	sev.sigev_value.sival_ptr = (void *)ftp->ft_id;
 
-	timer_create(CLOCK_REALTIME, &sev, &ftp->ft_tid);
-	timer_settime(ftp->ft_tid, 0, &its, NULL);
+	if (timer_create(CLOCK_REALTIME, &sev, &ftp->ft_tid) != 0) {
+		zed_log_msg(LOG_ERR, "%s: failed to create timer: %s",
+		    ((fmd_module_t *)hdl)->mod_name, strerror(errno));
+		return (ftp);
+	}
+	ftp->ft_armed = B_TRUE;
+	if (timer_settime(ftp->ft_tid, 0, &its, NULL) != 0) {
+		zed_log_msg(LOG_ERR, "%s: failed to arm timer: %s",
+		    ((fmd_module_t *)hdl)->mod_name, strerror(errno));
+	}
 
 	fmd_hdl_debug(hdl, "installing timer for %d secs (%p)",
 	    (int)its.it_value.tv_sec, ftp->ft_tid);
@@ -600,7 +680,12 @@ fmd_timer_remove(fmd_hdl_t *hdl, fmd_timer_t *ftp)
 {
 	fmd_hdl_debug(hdl, "removing timer (%p)", ftp->ft_tid);
 
-	timer_delete(ftp->ft_tid);
+	(void) pthread_mutex_lock(&fmd_timers_lock);
+	list_remove(&fmd_timers, ftp);
+	(void) pthread_mutex_unlock(&fmd_timers_lock);
+
+	if (ftp->ft_armed)
+		timer_delete(ftp->ft_tid);
 
 	fmd_hdl_free(hdl, ftp, sizeof (fmd_timer_t));
 }
