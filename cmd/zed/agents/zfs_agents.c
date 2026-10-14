@@ -297,6 +297,13 @@ zfs_agent_post_event(const char *class, const char *subclass, nvlist_t *nvl)
 	    sizeof (event->ae_subclass));
 
 	(void) pthread_mutex_lock(&agent_lock);
+	if (agent_exiting) {
+		/* e.g. a module timer expiring while the agents shut down */
+		(void) pthread_mutex_unlock(&agent_lock);
+		nvlist_free(event->ae_nvl);
+		free(event);
+		goto out;
+	}
 	list_insert_tail(&agent_events, event);
 	(void) pthread_mutex_unlock(&agent_lock);
 
@@ -307,6 +314,15 @@ out:
 static void
 zfs_agent_dispatch(const char *class, const char *subclass, nvlist_t *nvl)
 {
+	/*
+	 * A module timer expired (see _timer_notify()); deliver it here so
+	 * that module code only ever runs on this thread.
+	 */
+	if (strcmp(class, FMD_TIMER_EXPIRED_CLASS) == 0) {
+		fmd_timer_expired(nvl);
+		return;
+	}
+
 	/*
 	 * The diagnosis engine subscribes to the following events.
 	 * On illumos these subscriptions reside in:
@@ -430,7 +446,9 @@ zfs_agent_fini(void)
 	fmd_hdl_t *hdl;
 	agent_event_t *event;
 
+	(void) pthread_mutex_lock(&agent_lock);
 	agent_exiting = 1;
+	(void) pthread_mutex_unlock(&agent_lock);
 	(void) pthread_cond_signal(&agent_cond);
 
 	/* wait for zfs_enum_pools thread to complete */

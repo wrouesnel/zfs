@@ -25,6 +25,7 @@
 #include <libnvpair.h>
 #include <stdarg.h>
 #include <sys/kmem.h>
+#include <sys/list.h>
 
 #ifdef	__cplusplus
 extern "C" {
@@ -42,7 +43,16 @@ typedef struct fmd_timer {
 	timer_t		ft_tid;
 	void		*ft_arg;
 	fmd_hdl_t	*ft_hdl;
+	uintptr_t	ft_id;		/* lookup key for an expired timer */
+	boolean_t	ft_armed;	/* timer_create() succeeded */
+	list_node_t	ft_node;	/* on the list of installed timers */
 } fmd_timer_t;
+
+/*
+ * Class of the agent event that delivers an expired timer to its module.
+ */
+#define	FMD_TIMER_EXPIRED_CLASS	"fmd.timer.expired"
+#define	FMD_TIMER_EXPIRED_ID	"timer-id"
 
 #define	id_t	fmd_timer_t *
 
@@ -194,6 +204,7 @@ extern void fmd_serd_gc(fmd_hdl_t *);
 
 extern id_t fmd_timer_install(fmd_hdl_t *, void *, fmd_event_t *, hrtime_t);
 extern void fmd_timer_remove(fmd_hdl_t *, id_t);
+extern void fmd_timer_expired(nvlist_t *);
 
 extern nvlist_t *fmd_nvl_create_fault(fmd_hdl_t *,
     const char *, uint8_t, nvlist_t *, nvlist_t *, nvlist_t *);
