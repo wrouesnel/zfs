@@ -296,6 +296,14 @@ idle:
 		}
 		rv = zed_event_service(&zcp);
 
+		/*
+		 * EINTR: a signal interrupted the wait for the next event
+		 * (SIGHUP, SIGSTOP/SIGCONT, ptrace, the freezer).  Check
+		 * _got_exit and _got_hup, then wait again.
+		 */
+		if (rv == EINTR)
+			continue;
+
 		/* ENODEV: When kernel module is unloaded (osx) */
 		if (rv != 0)
 			break;
