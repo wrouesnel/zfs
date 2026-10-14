@@ -1413,6 +1413,7 @@ vdev_ops_t vdev_disk_ops = {
 	.vdev_op_psize_to_asize = vdev_default_asize,
 	.vdev_op_min_asize = vdev_default_min_asize,
 	.vdev_op_min_alloc = NULL,
+	.vdev_op_min_attach_asize = NULL,
 	.vdev_op_io_start = vdev_disk_io_start,
 	.vdev_op_io_done = vdev_disk_io_done,
 	.vdev_op_state_change = NULL,

@@ -98,6 +98,7 @@ typedef const struct vdev_ops {
 	vdev_asize_func_t		*vdev_op_asize_to_psize;
 	vdev_min_asize_func_t		*vdev_op_min_asize;
 	vdev_min_alloc_func_t		*vdev_op_min_alloc;
+	vdev_min_asize_func_t		*vdev_op_min_attach_asize;
 	vdev_io_start_func_t		*vdev_op_io_start;
 	vdev_io_done_func_t		*vdev_op_io_done;
 	vdev_state_change_func_t	*vdev_op_state_change;
