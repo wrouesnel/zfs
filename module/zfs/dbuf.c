@@ -2807,7 +2807,7 @@ dmu_buf_will_dirty(dmu_buf_t *db_fake, dmu_tx_t *tx)
 }
 
 void
-dmu_buf_will_rewrite(dmu_buf_t *db_fake, dmu_tx_t *tx)
+dmu_buf_will_rewrite(dmu_buf_t *db_fake, dmu_tx_t *tx, dmu_flags_t flags)
 {
 	dmu_buf_impl_t *db = (dmu_buf_impl_t *)db_fake;
 
@@ -2829,7 +2829,7 @@ dmu_buf_will_rewrite(dmu_buf_t *db_fake, dmu_tx_t *tx)
 	 * The dbuf is not dirty, so we need to make it dirty and
 	 * mark it for rewrite (preserve logical birth time).
 	 */
-	dmu_buf_will_dirty_flags(db_fake, tx, DMU_READ_NO_PREFETCH);
+	dmu_buf_will_dirty_flags(db_fake, tx, flags);
 
 	mutex_enter(&db->db_mtx);
 	dbuf_dirty_record_t *dr = dbuf_find_dirty_eq(db, tx->tx_txg);

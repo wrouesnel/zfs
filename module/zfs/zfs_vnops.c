@@ -1269,10 +1269,18 @@ zfs_rewrite(znode_t *zp, uint64_t off, uint64_t len, uint64_t flags,
 				continue;
 
 			nw += dbp[i]->db_size;
-			if (flags & ZFS_REWRITE_PHYSICAL)
-				dmu_buf_will_rewrite(dbp[i], tx);
-			else
-				dmu_buf_will_dirty(dbp[i], tx);
+			/*
+			 * Dirty with the same Uncached I/O flag the blocks
+			 * were held with, so that the rewrite doesn't make
+			 * them cacheable.
+			 */
+			if (flags & ZFS_REWRITE_PHYSICAL) {
+				dmu_buf_will_rewrite(dbp[i], tx,
+				    DMU_READ_NO_PREFETCH | DMU_UNCACHEDIO);
+			} else {
+				dmu_buf_will_dirty_flags(dbp[i], tx,
+				    DMU_READ_NO_PREFETCH | DMU_UNCACHEDIO);
+			}
 		}
 		dmu_buf_rele_array(dbp, numbufs, FTAG);
 
