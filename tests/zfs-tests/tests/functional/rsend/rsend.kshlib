@@ -531,34 +531,47 @@ function churn_files
 # Mess up a send file's contents
 #
 # $1 The send file path
+# $2 Optional: if set, leave at least $minsize bytes after the offset.
+#    The stream resumed after a cut carries at least the bytes that
+#    followed it, so it is then long enough to be messed up again.
 #
 function mess_send_file
 {
 	typeset -i minsize=2072
-	file=$1
+	typeset file=$1
+	typeset -i keep=0
+	typeset b bytes=""
+
+	[[ -n "$2" ]] && keep=$minsize
 
 	filesize=$(stat_size $file)
-	if [ $filesize -lt $minsize ]; then
-		log_fail "Send file too small: $filesize < $minsize"
+	if [ $filesize -le $((minsize + keep)) ]; then
+		log_fail "Send file too small: $filesize <= $minsize + $keep"
 	fi
 
 	# Truncate the send stream at a random offset after the DRR_BEGIN
 	# record (beyond 2072 bytes), any smaller than this and the receiving
 	# system won't have enough info to create the partial dataset at all.
 	# We use zstream dump to verify there is an intact DRR_BEGIN record.
-	offset=$(((($RANDOM * $RANDOM) % ($filesize - $minsize)) + $minsize))
+	offset=$(((($RANDOM * $RANDOM) % ($filesize - $minsize - $keep)) + \
+	    $minsize))
 	nr_begins=$(head -c $offset $file | zstream dump | \
 	    awk '/DRR_BEGIN/ { print $5 }')
 	log_must [ "$nr_begins" -eq 1 ]
 
 	if (($RANDOM % 7 <= 1)); then
 		#
-		# We corrupt 2 bytes to minimize the chance that we
-		# write the same value that's already there.
+		# Invert 2 bytes (1 at the last byte), so the stream
+		# always changes.
 		#
-		log_must eval "dd if=/dev/urandom of=$file conv=notrunc " \
-		    "bs=1 count=2 seek=$offset >/dev/null 2>&1"
+		log_note "Corrupting $file ($filesize bytes) at $offset"
+		for b in $(od -An -tu1 -j $offset -N 2 $file); do
+			bytes+=$(printf '\\%03o' $((255 - b)))
+		done
+		log_must eval "printf '$bytes' | dd of=$file conv=notrunc " \
+		    "bs=1 seek=$offset >/dev/null 2>&1"
 	else
+		log_note "Truncating $file ($filesize bytes) at $offset"
 		log_must truncate -s $offset $file
 	fi
 }
@@ -623,7 +636,12 @@ function resume_test
 	log_must eval "$sendcmd >/$streamfs/$stream_num"
 
 	for ((i=0; i<2; i=i+1)); do
-		mess_send_file /$streamfs/$stream_num
+		if ((i == 0)); then
+			# Leave enough for the resumed stream to be cut again
+			mess_send_file /$streamfs/$stream_num keep
+		else
+			mess_send_file /$streamfs/$stream_num
+		fi
 		log_mustnot eval "zfs recv -suv $recvfs </$streamfs/$stream_num"
 		stream_num=$((stream_num+1))
 
