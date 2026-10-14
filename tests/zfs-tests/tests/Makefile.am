@@ -1688,6 +1688,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/events/zed_fd_spill.ksh \
 	functional/events/zed_io_config.ksh \
 	functional/events/zed_rc_filter.ksh \
+	functional/events/zed_signal_eintr.ksh \
 	functional/events/zed_slow_io.ksh \
 	functional/events/zed_slow_io_many_vdevs.ksh \
 	functional/events/zed_synchronous_zedlet.ksh \
