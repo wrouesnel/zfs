@@ -87,6 +87,10 @@ log_must eval "zfs send $POOL_NAME/testvol@snap1 | \
 	zfs recv $POOL_NAME/encroot/testvol"
 block_device_wait /dev/zvol/$POOL_NAME/encroot/testvol
 log_must dd if=/dev/zero of=/dev/zvol/$POOL_NAME/encroot/testvol bs=512 count=1
+# Closing a zvol that was open for writing makes udev probe it again (the
+# "watch" option), and while the probe holds it open the zpool export below
+# fails with "pool is busy".  Wait for the probe to finish.
+block_device_wait /dev/zvol/$POOL_NAME/encroot/testvol
 new_mntpnt=$(get_prop mountpoint $POOL_NAME/encroot/testfs)
 log_must eval "ls $new_mntpnt | grep -q testfile"
 log_must zfs destroy -r $POOL_NAME/testfs
