@@ -123,8 +123,8 @@ struct uberblock {
 	/* Maybe missing in uberblocks we read, but always written */
 	uint64_t	ub_mmp_magic;	/* MMP_MAGIC			*/
 	/*
-	 * If ub_mmp_delay == 0 and ub_mmp_magic is valid, MMP is off.
-	 * Otherwise, nanosec since last MMP write.
+	 * If ub_mmp_delay == 0, ub_mmp_magic is valid and ub_mmp_config has
+	 * no valid bits, MMP is off.  Otherwise, nanosec since last MMP write.
 	 */
 	uint64_t	ub_mmp_delay;
 

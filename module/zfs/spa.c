@@ -3928,6 +3928,23 @@ spa_activity_verify_config(spa_t *spa, uberblock_t *ub)
 }
 
 /*
+ * Whether the host that wrote this uberblock had multihost enabled: it is off
+ * when ub_mmp_delay is 0 and the uberblock has no MMP config.  The config is
+ * only written with multihost on, and older releases could write it with
+ * mmp_delay 0 (the first txg after an import, or the txg that turned multihost
+ * on) while the pool was in use.  zfs-0.7 uberblocks have no config.
+ */
+static boolean_t
+spa_ub_multihost(const uberblock_t *ub)
+{
+	if (ub->ub_mmp_magic != MMP_MAGIC)
+		return (B_FALSE);
+
+	return (ub->ub_mmp_delay != 0 || MMP_INTERVAL_VALID(ub) ||
+	    MMP_FAIL_INT_VALID(ub));
+}
+
+/*
  * Determine whether the activity check is required.
  */
 static boolean_t
@@ -3951,10 +3968,10 @@ spa_activity_check_required(spa_t *spa, uberblock_t *ub, nvlist_t *label)
 	/*
 	 * Skip the activity check when the MMP feature is disabled.
 	 * - MMP_MAGIC not set - Legacy pool predates the MMP feature, or
-	 * - MMP_MAGIC set && mmp_delay == 0 - MMP feature is disabled.
+	 * - MMP_MAGIC set && mmp_delay == 0 && no MMP config - MMP feature
+	 *   is disabled.
 	 */
-	if ((ub->ub_mmp_magic != MMP_MAGIC) ||
-	    (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay == 0)) {
+	if (!spa_ub_multihost(ub)) {
 		zfs_dbgmsg("mmp: skipping check: feature is disabled, "
 		    "spa=%s", spa_load_name(spa));
 		return (B_FALSE);
@@ -4496,8 +4513,7 @@ spa_ld_activity_check(spa_t *spa, uberblock_t *ub, nvlist_t *label)
 	vdev_t *rvd = spa->spa_root_vdev;
 	int error;
 
-	if (ub->ub_mmp_magic == MMP_MAGIC && ub->ub_mmp_delay &&
-	    spa_get_hostid(spa) == 0) {
+	if (spa_ub_multihost(ub) && spa_get_hostid(spa) == 0) {
 		spa_activity_set_load_info(spa, label, MMP_STATE_NO_HOSTID,
 		    ub->ub_txg, MMP_SEQ_VALID(ub) ? MMP_SEQ(ub) : 0, ENXIO);
 		zfs_dbgmsg("mmp: system hostid not set, ub_mmp_magic=%llx "

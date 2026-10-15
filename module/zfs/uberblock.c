@@ -51,6 +51,17 @@ uberblock_update(uberblock_t *ub, vdev_t *rvd, uint64_t txg, uint64_t mmp_delay)
 	ub->ub_software_version = SPA_VERSION;
 	ub->ub_mmp_magic = MMP_MAGIC;
 	if (spa_multihost(rvd->vdev_spa)) {
+		/*
+		 * An importing host reads MMP_MAGIC with mmp_delay 0 as
+		 * multihost=off and skips the activity check.  mmp_delay is
+		 * still 0 until the MMP thread has run, which can be after
+		 * the first txg of an import, or the txg that turns multihost
+		 * on, has synced.  Use the write interval until then, as the
+		 * MMP thread does when it starts.
+		 */
+		if (mmp_delay == 0)
+			mmp_delay = MSEC2NSEC(
+			    MMP_INTERVAL_OK(zfs_multihost_interval));
 		ub->ub_mmp_delay = mmp_delay;
 		ub->ub_mmp_config = MMP_SEQ_SET(0) |
 		    MMP_INTERVAL_SET(zfs_multihost_interval) |

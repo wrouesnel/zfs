@@ -55,7 +55,7 @@
  * activity in the pool, before concluding the pool is not in use.  The
  * mmp_delay field is a decaying average of the amount of time between
  * completion of successive MMP writes, in nanoseconds.  It indicates whether
- * MMP is enabled.
+ * MMP is enabled: 0 with no valid bits in ub_mmp_config means disabled.
  *
  * During import an activity test may now be performed to determine if
  * the pool is in use.  The activity test is typically required if the
