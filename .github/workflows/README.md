@@ -74,6 +74,24 @@ can also alter the selection. The `workflow_dispatch` trigger accepts
 `fedora_kernel_ver` (Fedora-only run with a chosen kernel) and
 `specific_os` (pin the matrix to one OS).
 
+### PRs that only change tests
+
+If a PR only changes test scripts (`scripts/changed-tests.py detect`),
+`test-config` passes those tests to the matrix, and each OS runs just
+them, on one VM, in their groups from `common.run` and the platform
+runfile: with the same setup, cleanup, tags and timeouts as in the full
+suite.  A test that isn't in an OS's runfiles is skipped there.  The PR
+may also change runfiles, as long as the changed sections only add or
+remove tests (added tests run too), and
+`tests/zfs-tests/tests/Makefile.am`, as long as it only lists files the
+PR adds or deletes.  Anything else, including files shared between tests
+(`include/`, `.cfg` and `.kshlib` files, `setup.ksh` and `cleanup.ksh`,
+test commands and data, the test runner and `zts-report.py.in`), runs
+the full suite, as does a `ZFS-CI-Type` tag.
+
+Only PRs do this.  Pushes always run the full suite, so a fork's push
+results can stand in for a PR's (see below), whatever the PR changes.
+
 ### Reusing fork QEMU results
 
 PRs can reuse QEMU results from their source fork without a repository

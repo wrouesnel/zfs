@@ -33,6 +33,7 @@ jobs:
     outputs:
       test_os: ${{ steps.os.outputs.os }}
       ci_type: ${{ steps.os.outputs.ci_type }}
+      tests: ${{ steps.os.outputs.tests }}
       reused_jobs: ${{ steps.reuse.outputs.jobs }}
       reused_os: ${{ steps.reuse.outputs.reused_os }}
       run_os: ${{ steps.reuse.outputs.run_os }}
@@ -46,12 +47,19 @@ jobs:
         run: |
           ci_type="default"
           ci_source="auto"
+          tests=""
 
           # determine CI type when running on PR
           if ${{ github.event_name == 'pull_request' }}; then
             head=${{ github.event.pull_request.head.sha }}
             base=${{ github.event.pull_request.base.sha }}
             read ci_type ci_source <<< "$(python3 .github/workflows/scripts/generate-ci-type.py $head $base)"
+            # A PR that only changes tests runs just those tests, unless
+            # a ZFS-CI-Type tag asks for something else.  Pushes always
+            # run the full suite: PRs reuse their results.
+            if [ "$ci_source" = "auto" ] && [ "$ci_type" != "docs" ]; then
+              tests=$(python3 .github/workflows/scripts/changed-tests.py detect "$base" "$head")
+            fi
           fi
 
           case "$ci_type" in
@@ -100,6 +108,7 @@ jobs:
 
           echo "os=$os_json" | tee -a $GITHUB_OUTPUT
           echo "ci_type=$ci_type" | tee -a $GITHUB_OUTPUT
+          echo "tests=$tests" | tee -a $GITHUB_OUTPUT
 
       - name: Find completed fork jobs
         id: reuse
@@ -195,7 +204,14 @@ jobs:
     - name: Setup testing machines
       if: env.REUSED_JOB == ''
       timeout-minutes: 5
-      run: .github/workflows/scripts/qemu-5-setup.sh
+      env:
+        ZTS_TESTS: ${{ needs.test-config.outputs.tests }}
+      run: |
+        if [ -n "$ZTS_TESTS" ]; then
+          # Only the PR's changed tests run; one VM is enough.
+          sed -i 's/^VMs=.*/VMs="1"/' /var/tmp/env.txt
+        fi
+        .github/workflows/scripts/qemu-5-setup.sh
 
     - name: Run tests
       if: env.REUSED_JOB == ''
@@ -203,6 +219,7 @@ jobs:
       run: .github/workflows/scripts/qemu-6-tests.sh
       env:
         CI_TYPE: ${{ needs.test-config.outputs.ci_type }}
+        ZTS_TESTS: ${{ needs.test-config.outputs.tests }}
 
     - name: Prepare artifacts
       if: always() && env.REUSED_JOB == ''
