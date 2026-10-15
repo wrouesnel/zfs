@@ -93,12 +93,9 @@ log_must set_tunable32 TXG_TIMEOUT 5000
 log_must zpool checkpoint $TESTPOOL1
 log_must zpool export $TESTPOOL1
 
-typeset bp=$(zdb -e -p $DEVICE_DIR -k -u $TESTPOOL1 |
-    awk '/^[[:space:]]*bp = / { print; exit }')
-typeset -i txg=$(echo "$bp" | sed -n 's/.*birth=\([0-9][0-9]*\)L.*/\1/p')
-(( txg > 0 )) ||
-    log_fail "Couldn't read the txg of the checkpointed state from: '$bp'"
-log_note "the checkpointed state was last written in txg $txg: $bp"
+typeset -i txg=$(get_checkpointed_txg $TESTPOOL1 $DEVICE_DIR)
+(( txg > 0 )) || log_fail "Couldn't read the txg of the checkpointed state"
+log_note "the checkpointed state was last written in txg $txg"
 
 #
 # An indirect block of a file is fatal for the txg by default.  A dry run
