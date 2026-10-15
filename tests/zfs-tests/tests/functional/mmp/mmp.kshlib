@@ -144,6 +144,8 @@ function mmp_pool_create_zhack # pool dir
 	log_must mmp_clear_hostid
 	log_must mmp_set_hostid $HOSTID2
 
+	typeset -i export_txg=$(mmp_max_ub_txg $dir/vdev1)
+
 	log_note "Starting zhack in the background as hostid $HOSTID1"
 	log_must eval "ZFS_HOSTID=$HOSTID1 zhack $opts >$MMP_ZHACK_LOG 2>&1 &"
 
@@ -151,6 +153,30 @@ function mmp_pool_create_zhack # pool dir
 		log_must pgrep -x zhack
 		log_must sleep 5
 	done
+
+	#
+	# The pool is listed as imported elsewhere as soon as zhack's MMP
+	# writes start, which is while zhack is still importing it.  zhack
+	# then syncs its first txgs and rewrites the labels.  An import
+	# attempt that reads the pool during that burst can see an uberblock
+	# and a label from different txgs and fail with a different error
+	# than "pool is imported".  Wait until zhack's import has synced.
+	#
+	typeset -i i=0
+	while (( $(mmp_max_ub_txg $dir/vdev1) <= export_txg )); do
+		log_must pgrep -x zhack
+		(( i++ < 120 )) || log_fail "zhack did not finish importing $pool"
+		sleep 1
+	done
+}
+
+#
+# Print the highest txg of the uberblocks in a vdev's labels.
+#
+function mmp_max_ub_txg # vdev
+{
+	zdb -lu $1 | awk '$1 == "txg" && $2 == "=" && $3 > m { m = $3 }
+	    END { print m + 0 }'
 }
 
 function mmp_pool_destroy # pool dir
