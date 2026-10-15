@@ -190,7 +190,7 @@ tests = ['mmp_on_thread', 'mmp_on_uberblocks', 'mmp_on_off', 'mmp_interval',
     'mmp_degraded_import', 'mmp_zhack_reclaim',
     'mmp_write_uberblocks', 'mmp_reset_interval', 'multihost_history',
     'mmp_on_zdb', 'mmp_write_distribution', 'mmp_hostid', 'mmp_write_slow_disk',
-    'mmp_concurrent_import']
+    'mmp_concurrent_import', 'mmp_on_delay', 'mmp_zero_delay_import']
 tags = ['functional', 'mmp']
 timeout = 1200
 

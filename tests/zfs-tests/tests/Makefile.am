@@ -350,6 +350,7 @@ nobase_dist_datadir_zfs_tests_tests_DATA += \
 	functional/migration/migration.cfg \
 	functional/migration/migration.kshlib \
 	functional/mmap/mmap.cfg \
+	functional/mmp/blockfiles/mmp_zero_delay.dat.bz2 \
 	functional/mmp/mmp.cfg \
 	functional/mmp/mmp.kshlib \
 	functional/mv_files/mv_files.cfg \
@@ -1881,6 +1882,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/mmp/mmp_hostid.ksh \
 	functional/mmp/mmp_inactive_import.ksh \
 	functional/mmp/mmp_interval.ksh \
+	functional/mmp/mmp_on_delay.ksh \
 	functional/mmp/mmp_on_off.ksh \
 	functional/mmp/mmp_on_thread.ksh \
 	functional/mmp/mmp_on_uberblocks.ksh \
@@ -1889,6 +1891,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/mmp/mmp_write_distribution.ksh \
 	functional/mmp/mmp_write_slow_disk.ksh \
 	functional/mmp/mmp_write_uberblocks.ksh \
+	functional/mmp/mmp_zero_delay_import.ksh \
 	functional/mmp/mmp_zhack_reclaim.ksh \
 	functional/mmp/multihost_history.ksh \
 	functional/mmp/setup.ksh \
