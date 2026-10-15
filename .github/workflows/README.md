@@ -8,13 +8,18 @@ workflows run independently alongside it.
 flowchart TB
 subgraph Functional testing
   Setup[test-config: pick ci_type + OS matrix]
-  Setup --> almalinux
-  Setup --> centos[centos-stream]
-  Setup --> debian
-  Setup --> fedora
-  Setup --> ubuntu
-  Setup --> freebsd
-  almalinux --> Cleanup[cleanup + summary]
+  Setup --> Reused[qemu-reused: fork results]
+  Setup --> Gate
+  Precheck[precheck: zfs-precheck.yml, PRs only] --> Gate
+  Gate{{qemu-vm: unless the precheck verdict failed}}
+  Gate --> almalinux
+  Gate --> centos[centos-stream]
+  Gate --> debian
+  Gate --> fedora
+  Gate --> ubuntu
+  Gate --> freebsd
+  Reused --> Cleanup[cleanup + summary]
+  almalinux --> Cleanup
   centos --> Cleanup
   debian --> Cleanup
   fedora --> Cleanup
@@ -32,7 +37,6 @@ subgraph Other workflows
   zfs-arm.yml
   zloop.yml
   labels.yml
-  zfs-precheck.yml
 end
 ```
 
@@ -151,9 +155,10 @@ Available via `specific_os` or `ZTS_OS_OVERRIDE`:
 - `zfs-arm.yml`: ARM build on `ubuntu-24.04-arm`
 - `zloop.yml`: host-side zloop
 - `labels.yml`: maintains PR status labels
-- `zfs-precheck.yml`: quick checks on one VM; for PRs that add a test in
-  one commit and fix the bug in a later commit, checks that the test
-  fails on the test commit and passes on the PR head (see below)
+- `zfs-precheck.yml`: quick checks on one VM, called by `zfs-qemu.yml`
+  for PRs before its matrix; for PRs that add a test in one commit and
+  fix the bug in a later commit, checks that the test fails on the test
+  commit and passes on the PR head (see below)
 - `zfs-qemu-packages.yml`: manually dispatched, builds release RPMs or
   tests RPM installation from the ZFS yum repo
 
@@ -178,6 +183,31 @@ all of them must pass without kernel errors.  Tests run one at a time
 with `zfs-tests.sh -t`, and the VM is restarted after a crash or hang.
 The `Verdict` job collects the results.  PRs without a test commit finish
 after `Detect`.
+
+For a PR, `zfs-qemu.yml` calls `zfs-precheck.yml` as its `Precheck` job,
+and the `qemu-vm` matrix waits for it:
+
+- no test commit: the matrix starts once `Detect` has finished (about a
+  minute),
+- the verdict passed: the matrix runs,
+- the verdict failed: the matrix is skipped, so a PR whose test doesn't
+  catch the bug, or whose fix doesn't fix it, gets that answer in about
+  half an hour without a full test run.
+
+Any failure of the precheck skips the matrix, including a broken VM in a
+`Verify` job.  Re-running the failed jobs of the `zfs-qemu` run reruns
+the precheck and then the matrix.
+
+OSes whose QEMU results are reused from the fork don't wait: they are a
+separate matrix job, `qemu-reused`, with the same name and steps as
+`qemu-vm`, so the checks are `qemu-x86 (<os>)` either way, and a
+requested rerun of one of them runs its tests.  If every OS is reused,
+nothing waits for the precheck.
+
+Pushes (to forks) don't call the precheck from `zfs-qemu.yml`:
+`zfs-precheck.yml` runs on its own alongside it, and the matrix always
+runs in full, so the fork's push results stay complete for reuse.
+`zfs-precheck.yml` can also be run by hand with `workflow_dispatch`.
 
 The repository variables `FAILFIRST_OS` and `FAILFIRST_UPSTREAM` change
 the test OS and the repository whose `master` is the base for pushes.

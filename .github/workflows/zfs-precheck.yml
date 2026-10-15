@@ -10,10 +10,14 @@ name: zfs-precheck
 #
 # A test commit changes only files under tests/ and adds or modifies a test
 # script; see scripts/failfirst-detect.py.
+#
+# For a PR, zfs-qemu.yml calls this workflow and its QEMU matrix waits for
+# the verdict: if the PR's test commits fail verification, the full tests
+# don't run.  Pushes to forks run it on its own, alongside zfs-qemu.
 
 on:
   push:
-  pull_request:
+  workflow_call:
   workflow_dispatch:
     inputs:
       base:
@@ -27,9 +31,13 @@ on:
         default: ""
         description: "(optional) OS to test on (default: ubuntu24)"
 
+# When called, github.workflow and github.head_ref are the caller's, so
+# a group built from them would be the caller's own group.  A called run
+# belongs to its caller, whose group cancels it, so it gets a group of its
+# own here.
 concurrency:
   group: >-
-    ${{ github.workflow }}-${{ github.head_ref ||
+    zfs-precheck-${{
     (github.event_name == 'push' && github.ref) || github.run_id }}
   cancel-in-progress: true
 
