@@ -10242,6 +10242,21 @@ spa_async_thread(void *arg)
 	    !spa_feature_is_enabled(dp->dp_spa, SPA_FEATURE_RESILVER_DEFER)))
 		dsl_scan_restart_resilver(dp, 0);
 
+	/*
+	 * A rebuild stops when its top-level vdev can't be written, and
+	 * stays active so that it resumes.  vdev_open() asks for a
+	 * resilver when a device that needs one comes back: restart any
+	 * rebuild that is active but has no thread.
+	 */
+	if (tasks & SPA_ASYNC_RESILVER &&
+	    vdev_rebuild_active(spa->spa_root_vdev)) {
+		spa_namespace_enter(FTAG);
+		spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
+		vdev_rebuild_restart(spa);
+		spa_config_exit(spa, SCL_CONFIG, FTAG);
+		spa_namespace_exit(FTAG);
+	}
+
 	if (tasks & SPA_ASYNC_INITIALIZE_RESTART) {
 		spa_namespace_enter(FTAG);
 		spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
