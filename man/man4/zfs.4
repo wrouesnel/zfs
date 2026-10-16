@@ -2251,6 +2251,14 @@ completes in order to verify the checksums of all blocks which have been
 resilvered.
 This is enabled by default and strongly recommended.
 .
+.It Sy zfs_rebuild_sm_load_delay_ms Ns = Ns Sy 0 Ns ms Pq uint
+When non-zero, a sequential resilver waits this many milliseconds before
+reading each metaslab's space map.
+It waits while holding that metaslab's sync lock, so a txg that syncs that
+metaslab waits as well, and so does anything waiting for that txg.
+This is for debug use only: the test suite uses it to trigger race
+conditions.
+.
 .It Sy zfs_rebuild_vdev_limit Ns = Ns Sy 67108864 Ns B Po 64 MiB Pc Pq u64
 Maximum amount of I/O that can be concurrently issued for a sequential
 resilver per leaf device, given in bytes.

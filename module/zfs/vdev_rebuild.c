@@ -124,6 +124,15 @@ static uint64_t zfs_rebuild_vdev_limit = 64 << 20;
 static int zfs_rebuild_scrub_enabled = 1;
 
 /*
+ * For testing only: before reading a metaslab's space map, the rebuild
+ * thread waits this many milliseconds, so that a test can free blocks in
+ * that metaslab while the thread is about to read it.  The thread holds
+ * the metaslab's ms_sync_lock while it waits, so a txg that syncs that
+ * metaslab waits too, and so does anything waiting for that txg.
+ */
+static uint_t zfs_rebuild_sm_load_delay_ms = 0;
+
+/*
  * For vdev_rebuild_initiate_sync() and vdev_rebuild_reset_sync().
  */
 static __attribute__((noreturn)) void vdev_rebuild_thread(void *arg);
@@ -864,6 +873,22 @@ vdev_rebuild_thread(void *arg)
 		 * unflushed frees.  This is the minimum range to be rebuilt.
 		 */
 		if (msp->ms_sm != NULL) {
+			if (zfs_rebuild_sm_load_delay_ms != 0) {
+				zfs_dbgmsg("rebuild: waiting %u ms before "
+				    "loading space map of vdev %llu ms %llu",
+				    zfs_rebuild_sm_load_delay_ms,
+				    (u_longlong_t)vd->vdev_id,
+				    (u_longlong_t)msp->ms_id);
+				/*
+				 * Sleep in short ticks and stop when the
+				 * rebuild is asked to stop, so that an export
+				 * or detach need not wait out the delay.
+				 */
+				for (uint_t ms = 0;
+				    !vdev_rebuild_should_stop(vd) &&
+				    ms < zfs_rebuild_sm_load_delay_ms; ms += 10)
+					delay(MSEC_TO_TICK(10));
+			}
 			VERIFY0(space_map_load(msp->ms_sm,
 			    vr->vr_scan_tree, SM_ALLOC));
 
@@ -1200,3 +1225,7 @@ ZFS_MODULE_PARAM(zfs, zfs_, rebuild_vdev_limit, U64, ZMOD_RW,
 
 ZFS_MODULE_PARAM(zfs, zfs_, rebuild_scrub_enabled, INT, ZMOD_RW,
 	"Automatically scrub after sequential resilver completes");
+
+ZFS_MODULE_PARAM(zfs, zfs_, rebuild_sm_load_delay_ms, UINT, ZMOD_RW,
+	"Delay before a sequential resilver reads each space map "
+	"(debug use only - stalls the resilver and txg sync)");
