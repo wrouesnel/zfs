@@ -6389,9 +6389,17 @@ spa_load_impl(spa_t *spa, spa_import_type_t type, const char **ereport)
 		spa_import_progress_set_notes(spa, "Starting resilvers");
 		if (vdev_rebuild_active(spa->spa_root_vdev)) {
 			vdev_rebuild_restart(spa);
-		} else if (!dsl_scan_resilvering(spa->spa_dsl_pool) &&
-		    vdev_resilver_needed(spa->spa_root_vdev, NULL, NULL)) {
-			spa_async_request(spa, SPA_ASYNC_RESILVER);
+		} else if (!dsl_scan_resilvering(spa->spa_dsl_pool)) {
+			/*
+			 * The async thread detaches a replaced or spare
+			 * device after the txg that completes its resilver.
+			 * If the pool stopped in between, detach it now.
+			 */
+			if (vdev_resilver_needed(spa->spa_root_vdev, NULL,
+			    NULL))
+				spa_async_request(spa, SPA_ASYNC_RESILVER);
+			else
+				spa_async_request(spa, SPA_ASYNC_RESILVER_DONE);
 		}
 
 		/*
