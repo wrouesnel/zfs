@@ -184,6 +184,17 @@ spa_checkpoint_discard_complete_sync(void *arg, dmu_tx_t *tx)
 	spa_feature_decr(spa, SPA_FEATURE_POOL_CHECKPOINT, tx);
 	spa_notify_waiters(spa);
 
+	/*
+	 * While the pool had a checkpoint, a completed resilver could not
+	 * clear the DTLs (dsl_scan_done()) and a completed replacement
+	 * could not be detached (spa_vdev_detach()).  Resilver what is
+	 * still missing, or detach the replacements that are complete.
+	 */
+	if (vdev_resilver_needed(spa->spa_root_vdev, NULL, NULL))
+		spa_async_request(spa, SPA_ASYNC_RESILVER);
+	else
+		spa_async_request(spa, SPA_ASYNC_RESILVER_DONE);
+
 	spa_history_log_internal(spa, "spa discard checkpoint", tx,
 	    "finished discarding checkpointed state from the pool");
 }
