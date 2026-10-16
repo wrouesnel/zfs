@@ -2049,6 +2049,15 @@ spa_vdev_remove_cancel_sync(void *arg, dmu_tx_t *tx)
 
 	vdev_config_dirty(vd);
 
+	/*
+	 * spa_vdev_remove_top() stopped any initialize, TRIM or autotrim
+	 * of this vdev and left them active, so that they resume if the
+	 * removal is canceled.  Resume them now.
+	 */
+	spa_async_request(spa, SPA_ASYNC_INITIALIZE_RESTART);
+	spa_async_request(spa, SPA_ASYNC_TRIM_RESTART);
+	spa_async_request(spa, SPA_ASYNC_AUTOTRIM_RESTART);
+
 	zfs_dbgmsg("canceled device removal for vdev %llu in %llu",
 	    (u_longlong_t)vd->vdev_id, (u_longlong_t)dmu_tx_get_txg(tx));
 	spa_history_log_internal(spa, "vdev remove canceled", tx,
