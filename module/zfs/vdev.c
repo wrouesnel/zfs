@@ -2453,6 +2453,22 @@ vdev_open(vdev_t *vd, cred_t *cred)
 	if (vd->vdev_ops->vdev_op_leaf && !spa->spa_scrub_reopen)
 		dsl_scan_assess_vdev(spa->spa_dsl_pool, vd);
 
+	/*
+	 * An initialize or TRIM stops when its leaf can't be written, and
+	 * stays active unless the leaf was faulted.  vdev_online() restarts
+	 * it, but a leaf can also come back through a reopen ("zpool clear",
+	 * "zpool reopen"): have the async thread restart it then.  These
+	 * are only hints; the restart checks them again under the locks.
+	 */
+	if (vd->vdev_ops->vdev_op_leaf && vdev_writeable(vd)) {
+		if (vd->vdev_initialize_state == VDEV_INITIALIZE_ACTIVE &&
+		    vd->vdev_initialize_thread == NULL)
+			spa_async_request(spa, SPA_ASYNC_INITIALIZE_RESTART);
+		if (vd->vdev_trim_state == VDEV_TRIM_ACTIVE &&
+		    vd->vdev_trim_thread == NULL && !vd->vdev_isl2cache)
+			spa_async_request(spa, SPA_ASYNC_TRIM_RESTART);
+	}
+
 	return (0);
 }
 
