@@ -2099,6 +2099,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/removal/cleanup.ksh \
 	functional/removal/removal_all_vdev.ksh \
 	functional/removal/removal_cancel.ksh \
+	functional/removal/removal_cancel_initialize.ksh \
 	functional/removal/removal_check_space.ksh \
 	functional/removal/removal_condense_export.ksh \
 	functional/removal/removal_indirect_class.ksh \
