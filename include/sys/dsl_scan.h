@@ -67,6 +67,7 @@ typedef enum dsl_scan_flags {
 	DSF_VISIT_DS_AGAIN = 1<<0,
 	DSF_SCRUB_PAUSED = 1<<1,
 	DSF_SCRUB_THOROUGH = 1<<2,
+	DSF_SCRUB_HEALING = 1<<3,	/* scrub of a DTL range: a resilver */
 } dsl_scan_flags_t;
 
 typedef struct dsl_errorscrub_phys {

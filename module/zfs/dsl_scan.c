@@ -1008,6 +1008,13 @@ dsl_scan_setup_sync(void *arg, dmu_tx_t *tx)
 
 		if (vdev_resilver_needed(spa->spa_root_vdev,
 		    &scn->scn_phys.scn_min_txg, &scn->scn_phys.scn_max_txg)) {
+			/*
+			 * A scrub set up now only scans the DTL range, as a
+			 * resilver does: note it, so that it also finishes
+			 * as one and isn't taken for a full scrub.
+			 */
+			if (DSL_SCAN_IS_SCRUB(scn))
+				scn->scn_phys.scn_flags |= DSF_SCRUB_HEALING;
 			nvlist_t *aux = fnvlist_alloc();
 			fnvlist_add_string(aux, ZFS_EV_RESILVER_TYPE,
 			    "healing");
@@ -1257,7 +1264,8 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 	} else {
 		spa_history_log_internal(spa, "scan done", tx,
 		    "errors=%llu", (u_longlong_t)spa_approx_errlog_size(spa));
-		if (DSL_SCAN_IS_SCRUB(scn)) {
+		if (DSL_SCAN_IS_SCRUB(scn) &&
+		    !(scn->scn_phys.scn_flags & DSF_SCRUB_HEALING)) {
 			VERIFY0(zap_update(dp->dp_meta_objset,
 			    DMU_POOL_DIRECTORY_OBJECT,
 			    DMU_POOL_LAST_SCRUBBED_TXG,
@@ -1285,7 +1293,8 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 			vdev_dtl_reassess(spa->spa_root_vdev, tx->tx_txg,
 			    scn->scn_phys.scn_max_txg, B_TRUE, B_FALSE);
 
-			if (DSL_SCAN_IS_RESILVER(scn)) {
+			if (DSL_SCAN_IS_RESILVER(scn) ||
+			    (scn->scn_phys.scn_flags & DSF_SCRUB_HEALING)) {
 				nvlist_t *aux = fnvlist_alloc();
 				fnvlist_add_string(aux, ZFS_EV_RESILVER_TYPE,
 				    "healing");
