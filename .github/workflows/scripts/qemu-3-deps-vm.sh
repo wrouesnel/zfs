@@ -29,7 +29,7 @@ function alpine() {
     nfs-utils openssl-dev parted pax procps py3-cffi py3-distlib py3-packaging \
     py3-setuptools python3 python3-dev qemu-guest-agent rng-tools rsync samba \
     samba-server sed strace sysstat tzdata util-linux util-linux-dev wget \
-    words xfsprogs xxhash zlib-dev pamtester@testing
+    wipefs words xfsprogs xxhash zlib-dev pamtester@testing
   echo "##[endgroup]"
 
   echo "##[group]Switch to eudev"
