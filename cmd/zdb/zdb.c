@@ -5083,6 +5083,14 @@ dump_cachefile(const char *cachefile)
 		zdb_exit(1);
 	}
 
+	if (statbuf.st_size == 0) {
+		/* No pool uses the cache file, e.g. all have cachefile=none */
+		(void) printf("'%s' is empty: no pools are recorded in it\n",
+		    cachefile);
+		(void) close(fd);
+		zdb_exit(0);
+	}
+
 	if ((buf = malloc(statbuf.st_size)) == NULL) {
 		(void) fprintf(stderr, "failed to allocate %llu bytes\n",
 		    (u_longlong_t)statbuf.st_size);
@@ -5098,7 +5106,9 @@ dump_cachefile(const char *cachefile)
 	(void) close(fd);
 
 	if (nvlist_unpack(buf, statbuf.st_size, &config, 0) != 0) {
-		(void) fprintf(stderr, "failed to unpack nvlist\n");
+		(void) fprintf(stderr, "cannot read pool configurations from "
+		    "'%s': not a valid cache file (failed to unpack nvlist)\n",
+		    cachefile);
 		zdb_exit(1);
 	}
 
