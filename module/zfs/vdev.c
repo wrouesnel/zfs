@@ -3234,6 +3234,51 @@ vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t t, uint64_t txg, uint64_t size)
 	return (dirty);
 }
 
+typedef struct vdev_dtl_clip_arg {
+	zfs_range_tree_t	*vdca_rt;
+	uint64_t		vdca_start;
+	uint64_t		vdca_end;
+} vdev_dtl_clip_arg_t;
+
+static void
+vdev_dtl_add_clipped(void *arg, uint64_t start, uint64_t size)
+{
+	vdev_dtl_clip_arg_t *vdca = arg;
+	uint64_t s = MAX(start, vdca->vdca_start);
+	uint64_t e = MIN(start + size, vdca->vdca_end);
+
+	if (s < e) {
+		zfs_range_tree_clear(vdca->vdca_rt, s, e - s);
+		zfs_range_tree_add(vdca->vdca_rt, s, e - s);
+	}
+}
+
+/*
+ * A scan couldn't repair blocks born in [txg, txg + size): it couldn't read
+ * them from any copy.  Note the txgs that each leaf below vd is missing in
+ * its DTL_SCRUB, as a failed repair write does, so that completing the scan
+ * doesn't excise them from the leaf's DTL_MISSING.
+ */
+void
+vdev_dtl_scrub_unrepaired(vdev_t *vd, uint64_t txg, uint64_t size)
+{
+	for (uint64_t c = 0; c < vd->vdev_children; c++)
+		vdev_dtl_scrub_unrepaired(vd->vdev_child[c], txg, size);
+
+	if (!vd->vdev_ops->vdev_op_leaf)
+		return;
+
+	vdev_dtl_clip_arg_t vdca = {
+		.vdca_rt = vd->vdev_dtl[DTL_SCRUB],
+		.vdca_start = txg,
+		.vdca_end = txg + size,
+	};
+	mutex_enter(&vd->vdev_dtl_lock);
+	zfs_range_tree_walk(vd->vdev_dtl[DTL_MISSING], vdev_dtl_add_clipped,
+	    &vdca);
+	mutex_exit(&vd->vdev_dtl_lock);
+}
+
 boolean_t
 vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t t)
 {
@@ -3364,10 +3409,14 @@ vdev_dtl_should_excise(vdev_t *vd, boolean_t rebuild_done)
 		 * scan (i.e. it is not in the range (scn_min_txg, scn_max_txg]
 		 * then it is not eligible for excision.
 		 */
+		/*
+		 * A resilver that couldn't repair some txgs leaves them in the
+		 * DTL, below vdev_resilver_txg, so a later resilver's range
+		 * may end before vdev_resilver_txg.
+		 */
 		if (vdev_dtl_max(vd) <= scn->scn_phys.scn_max_txg) {
 			ASSERT3U(scnp->scn_min_txg, <=, vdev_dtl_min(vd));
 			ASSERT3U(scnp->scn_min_txg, <, vd->vdev_resilver_txg);
-			ASSERT3U(vd->vdev_resilver_txg, <=, scnp->scn_max_txg);
 			return (B_TRUE);
 		}
 	}
@@ -6095,17 +6144,19 @@ vdev_defer_resilver(vdev_t *vd)
 /*
  * Clears the resilver deferred flag on all leaf devs under vd. Returns
  * B_TRUE if we have devices that need to be resilvered and are available to
- * accept resilver I/Os.
+ * accept resilver I/Os; with deferred_only, only counting devices whose
+ * resilver was deferred.
  */
 boolean_t
-vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx)
+vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx, boolean_t deferred_only)
 {
 	boolean_t resilver_needed = B_FALSE;
 	spa_t *spa = vd->vdev_spa;
 
 	for (int c = 0; c < vd->vdev_children; c++) {
 		vdev_t *cvd = vd->vdev_child[c];
-		resilver_needed |= vdev_clear_resilver_deferred(cvd, tx);
+		resilver_needed |= vdev_clear_resilver_deferred(cvd, tx,
+		    deferred_only);
 	}
 
 	if (vd == spa->spa_root_vdev &&
@@ -6120,10 +6171,11 @@ vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx)
 	    !vd->vdev_ops->vdev_op_leaf)
 		return (resilver_needed);
 
+	boolean_t deferred = vd->vdev_resilver_deferred;
 	vd->vdev_resilver_deferred = B_FALSE;
 
-	return (!vdev_is_dead(vd) && !vd->vdev_offline &&
-	    vdev_resilver_needed(vd, NULL, NULL));
+	return ((deferred || !deferred_only) && !vdev_is_dead(vd) &&
+	    !vd->vdev_offline && vdev_resilver_needed(vd, NULL, NULL));
 }
 
 boolean_t

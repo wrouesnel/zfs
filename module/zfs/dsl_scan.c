@@ -1333,8 +1333,14 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		 * will find the drives that need to be resilvered
 		 * and start the resilver then.
 		 */
+		/*
+		 * After a scan with errors, a DTL can still hold txgs the scan
+		 * couldn't repair; restarting for those would only fail
+		 * again, so only restart for devices that were deferred.
+		 */
 		if (spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER) &&
-		    vdev_clear_resilver_deferred(spa->spa_root_vdev, tx)) {
+		    vdev_clear_resilver_deferred(spa->spa_root_vdev, tx,
+		    scn->scn_phys.scn_errors != 0)) {
 			spa_history_log_internal(spa,
 			    "starting deferred resilver", tx, "errors=%llu",
 			    (u_longlong_t)spa_approx_errlog_size(spa));
@@ -2318,6 +2324,23 @@ inline __attribute__((always_inline)) static void dsl_scan_visitdnode(
  * Return nonzero on i/o error.
  * Return new buf to write out in *bufp.
  */
+/*
+ * The scan couldn't read bp, so it didn't visit the blocks below it either.
+ * They were born no later than bp; keep their txgs in the DTLs of the
+ * leaves that are missing them.
+ */
+static void
+dsl_scan_unvisited(dsl_scan_t *scn, const blkptr_t *bp)
+{
+	uint64_t start = scn->scn_phys.scn_min_txg + 1;
+	uint64_t end = BP_GET_PHYSICAL_BIRTH(bp) + 1;
+
+	if (end > start) {
+		vdev_dtl_scrub_unrepaired(scn->scn_dp->dp_spa->spa_root_vdev,
+		    start, end - start);
+	}
+}
+
 inline __attribute__((always_inline)) static int
 dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
     dnode_phys_t *dnp, const blkptr_t *bp,
@@ -2354,6 +2377,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 		    ZIO_PRIORITY_SCRUB, zio_flags, &flags, zb);
 		if (err) {
 			scn->scn_phys.scn_errors++;
+			dsl_scan_unvisited(scn, bp);
 			return (err);
 		}
 		for (i = 0, cbp = buf->b_data; i < epb; i++, cbp++) {
@@ -2382,6 +2406,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 		    ZIO_PRIORITY_SCRUB, zio_flags, &flags, zb);
 		if (err) {
 			scn->scn_phys.scn_errors++;
+			dsl_scan_unvisited(scn, bp);
 			return (err);
 		}
 		for (i = 0, cdnp = buf->b_data; i < epb;
@@ -2401,6 +2426,7 @@ dsl_scan_recurse(dsl_scan_t *scn, dsl_dataset_t *ds, dmu_objset_type_t ostype,
 		    ZIO_PRIORITY_SCRUB, zio_flags, &flags, zb);
 		if (err) {
 			scn->scn_phys.scn_errors++;
+			dsl_scan_unvisited(scn, bp);
 			return (err);
 		}
 
@@ -5090,6 +5116,17 @@ dsl_scan_scrub_done(zio_t *zio)
 	    !(zio->io_flags & ZIO_FLAG_SPECULATIVE)) &&
 	    !(zio->io_error == EACCES && (zio->io_flags & ZIO_FLAG_SCRUB) &&
 	    !(zio->io_flags & ZIO_FLAG_RAW))) {
+		const blkptr_t *bp = zio->io_bp;
+
+		for (int d = 0; bp != NULL && d < BP_GET_NDVAS(bp); d++) {
+			vdev_t *vd = vdev_lookup_top(spa,
+			    DVA_GET_VDEV(&bp->blk_dva[d]));
+			if (vd != NULL) {
+				vdev_dtl_scrub_unrepaired(vd,
+				    BP_GET_PHYSICAL_BIRTH(bp), 1);
+			}
+		}
+
 		if (dsl_errorscrubbing(spa->spa_dsl_pool) &&
 		    !dsl_errorscrub_is_paused(spa->spa_dsl_pool->dp_scan)) {
 			atomic_inc_64(&spa->spa_dsl_pool->dp_scan

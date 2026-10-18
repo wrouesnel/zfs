@@ -69,6 +69,8 @@ extern void vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t d,
 extern boolean_t vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t d,
     uint64_t txg, uint64_t size);
 extern boolean_t vdev_dtl_empty(vdev_t *vd, vdev_dtl_type_t d);
+extern void vdev_dtl_scrub_unrepaired(vdev_t *vd, uint64_t txg,
+    uint64_t size);
 extern boolean_t vdev_default_need_resilver(vdev_t *vd, const dva_t *dva,
     size_t psize, uint64_t phys_birth);
 extern boolean_t vdev_dtl_need_resilver(vdev_t *vd, const dva_t *dva,
@@ -194,7 +196,8 @@ extern void vdev_state_dirty(vdev_t *vd);
 extern void vdev_state_clean(vdev_t *vd);
 
 extern void vdev_defer_resilver(vdev_t *vd);
-extern boolean_t vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx);
+extern boolean_t vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx,
+    boolean_t deferred_only);
 
 typedef enum vdev_config_flag {
 	VDEV_CONFIG_SPARE = 1 << 0,
