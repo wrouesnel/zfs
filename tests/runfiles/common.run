@@ -113,7 +113,8 @@ tests = ['cachefile_001_pos', 'cachefile_002_pos', 'cachefile_003_pos',
 tags = ['functional', 'cachefile']
 
 [tests/functional/casenorm]
-tests = ['case_all_values', 'norm_all_values', 'mixed_create_failure',
+tests = ['case_all_values', 'norm_all_values', 'norm_long_names',
+    'mixed_create_failure',
     'sensitive_none_lookup', 'sensitive_none_delete',
     'sensitive_formd_lookup', 'sensitive_formd_delete',
     'insensitive_none_lookup', 'insensitive_none_delete',
