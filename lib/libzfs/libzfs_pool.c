@@ -3570,6 +3570,9 @@ zpool_vdev_online(zpool_handle_t *zhp, const char *path, int flags,
 		if (wholedisk) {
 			const char *fullpath = path;
 			char buf[MAXPATHLEN];
+			char diskpath[MAXPATHLEN];
+			const char *base;
+			char *disk;
 			int error;
 
 			if (path[0] != '/') {
@@ -3582,7 +3585,18 @@ zpool_vdev_online(zpool_handle_t *zhp, const char *path, int flags,
 				fullpath = buf;
 			}
 
-			error = zpool_relabel_disk(hdl, fullpath, errbuf);
+			/*
+			 * The vdev may be named by its partition, but the
+			 * label to update is the whole disk's.
+			 */
+			base = strrchr(fullpath, '/') + 1;
+			if ((disk = zfs_strip_partition(base)) == NULL)
+				return (no_memory(hdl));
+			(void) snprintf(diskpath, sizeof (diskpath), "%.*s%s",
+			    (int)(base - fullpath), fullpath, disk);
+			free(disk);
+
+			error = zpool_relabel_disk(hdl, diskpath, errbuf);
 			if (error != 0)
 				return (error);
 		}
