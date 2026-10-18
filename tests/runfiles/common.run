@@ -171,7 +171,7 @@ tags = ['functional', 'cli_root', 'zinject']
 
 [tests/functional/cli_root/zdb]
 tests = ['zdb_002_pos', 'zdb_003_pos', 'zdb_004_pos', 'zdb_005_pos',
-    'zdb_006_pos', 'zdb_args_neg', 'zdb_args_pos',
+    'zdb_006_pos', 'zdb_args_neg', 'zdb_args_pos', 'zdb_cachefile',
     'zdb_block_size_histogram', 'zdb_checksum', 'zdb_decompress',
     'zdb_display_block', 'zdb_encrypted', 'zdb_encrypted_raw',
     'zdb_file_layout_001', 'zdb_file_layout_002', 'zdb_file_layout_003',
