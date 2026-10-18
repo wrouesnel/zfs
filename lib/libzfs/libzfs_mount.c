@@ -772,7 +772,7 @@ zfs_share(zfs_handle_t *zhp, const enum sa_protocol *proto)
 		if (err != SA_OK) {
 			return (zfs_error_fmt(zhp->zfs_hdl,
 			    proto_table[*curr_proto].p_share_err,
-			    "cannot share '%s: %s'",
+			    "cannot share '%s': %s",
 			    zfs_get_name(zhp), sa_errorstr(err)));
 		}
 

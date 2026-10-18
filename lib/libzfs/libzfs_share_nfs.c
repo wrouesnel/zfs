@@ -94,14 +94,14 @@ nfs_init_tmpfile(const char *prefix, const char *mdir, struct tmpfile *tmpf)
 
 	int fd = mkostemp(tmpf->name, O_CLOEXEC);
 	if (fd == -1) {
-		fprintf(stderr, "Unable to create temporary file: %s",
+		fprintf(stderr, "Unable to create temporary file: %s\n",
 		    zfs_strerror(errno));
 		return (B_FALSE);
 	}
 
 	tmpf->fp = fdopen(fd, "w+");
 	if (tmpf->fp == NULL) {
-		fprintf(stderr, "Unable to reopen temporary file: %s",
+		fprintf(stderr, "Unable to reopen temporary file: %s\n",
 		    zfs_strerror(errno));
 		close(fd);
 		return (B_FALSE);
