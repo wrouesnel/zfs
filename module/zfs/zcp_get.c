@@ -548,7 +548,23 @@ prop_valid_for_ds(dsl_dataset_t *ds, zfs_prop_t zfs_prop)
 	int error = get_objset_type(ds, &zfs_type);
 	if (error != 0)
 		return (B_FALSE);
-	return (zfs_prop_valid_for_type(zfs_prop, zfs_type, B_FALSE));
+	if (!zfs_prop_valid_for_type(zfs_prop, zfs_type, B_FALSE))
+		return (B_FALSE);
+
+	/*
+	 * A snapshot has only the properties of its head's type, as in
+	 * libzfs: a volume's snapshot has no ZPL version, and a
+	 * filesystem's snapshot has no volsize.
+	 */
+	if (ds->ds_is_snapshot) {
+		objset_t *os;
+		if (dmu_objset_from_ds(ds, &os) != 0)
+			return (B_FALSE);
+		zfs_type = (os->os_phys->os_type == DMU_OST_ZVOL) ?
+		    ZFS_TYPE_VOLUME : ZFS_TYPE_FILESYSTEM;
+		return (zfs_prop_valid_for_type(zfs_prop, zfs_type, B_TRUE));
+	}
+	return (B_TRUE);
 }
 
 /*
