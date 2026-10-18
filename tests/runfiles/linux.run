@@ -80,6 +80,10 @@ tags = ['functional', 'cli_root', 'zfs_sysfs']
 tests = ['add_nested_replacing_spare']
 tags = ['functional', 'cli_root', 'zpool_add']
 
+[tests/functional/cli_root/zpool_create:Linux]
+tests = ['zpool_create_zvol_exported_neg']
+tags = ['functional', 'cli_root', 'zpool_create']
+
 [tests/functional/cli_root/zpool_expand:Linux]
 tests = ['zpool_expand_001_pos', 'zpool_expand_002_pos',
     'zpool_expand_003_neg', 'zpool_expand_004_pos', 'zpool_expand_005_pos',
