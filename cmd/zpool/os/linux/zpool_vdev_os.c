@@ -357,7 +357,9 @@ check_disk(const char *path, blkid_cache cache, int force,
 		    uuid_is_null((uchar_t *)&vtoc->efi_parts[i].p_guid))
 			continue;
 
-		if (strncmp(path, UDISK_ROOT, strlen(UDISK_ROOT)) == 0)
+		/* Partition links, as zfs_append_partition() names them. */
+		if (strncmp(path, UDISK_ROOT, strlen(UDISK_ROOT)) == 0 ||
+		    strncmp(path, ZVOL_ROOT, strlen(ZVOL_ROOT)) == 0)
 			(void) snprintf(slice_path, sizeof (slice_path),
 			    "%s%s%d", path, "-part", i+1);
 		else
