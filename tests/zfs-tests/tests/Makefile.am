@@ -1955,6 +1955,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/pool_checkpoint/checkpoint_lun_expsz.ksh \
 	functional/pool_checkpoint/checkpoint_open.ksh \
 	functional/pool_checkpoint/checkpoint_removal.ksh \
+	functional/pool_checkpoint/checkpoint_resilver.ksh \
 	functional/pool_checkpoint/checkpoint_rewind.ksh \
 	functional/pool_checkpoint/checkpoint_ro_rewind.ksh \
 	functional/pool_checkpoint/checkpoint_sm_scale.ksh \
