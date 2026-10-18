@@ -68,9 +68,19 @@ for type in "mirror" "raidz" "raidz2"; do
 	# 3. Write a file to the pool to be read back
 	log_must dd if=/dev/urandom of=$TESTFILE bs=1M count=64
 
-	# 4. Inject CHECKSUM ERRORS on read with a zinject error handler
+	# 4. Inject CHECKSUM ERRORS on read with a zinject error handler.
+	#    ZED faults the vdev after 10 checksum ereports, but one read
+	#    pass can produce fewer: at most zfs_checksum_events_per_second
+	#    (20) are posted per second per vdev, and a mirror sends only
+	#    some of the reads to $FAULT_FILE.  Keep reading, a second
+	#    apart, until ZED has degraded it.
 	log_must zinject -d $FAULT_FILE -e corrupt -f 50 -T read $TESTPOOL
-	log_must dd if=$TESTFILE of=/dev/null bs=1M count=64
+	typeset -i pass=0
+	while ! check_vdev_state $TESTPOOL $FAULT_FILE "DEGRADED" && \
+	    (( pass++ < 10 )); do
+		log_must dd if=$TESTFILE of=/dev/null bs=1M count=64
+		sleep 1
+	done
 
 	# 5. Verify the ZED kicks in a hot spare and expected pool/device status
 	log_note "Wait for ZED to auto-spare"
