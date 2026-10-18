@@ -695,6 +695,9 @@ zap_entry_normalization_conflict(zap_entry_handle_t *zeh, zap_name_t *zn,
 
 		if (zn == NULL) {
 			zn = zap_name_alloc_str(zap, name, MT_NORMALIZE);
+			/* A name that can't be normalized has no match. */
+			if (zn == NULL)
+				return (B_FALSE);
 			allocdzn = B_TRUE;
 		}
 		if (zap_leaf_array_match(zeh->zeh_leaf, zn,
