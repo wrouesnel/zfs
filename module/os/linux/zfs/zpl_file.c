@@ -827,11 +827,11 @@ zpl_fallocate_common(struct inode *ip, int mode, loff_t offset, loff_t len)
 				goto out_unmark;
 
 			/*
-			 * extend file: log=TRUE drives z_seq bump,
-			 * mtime/ctime advance, and TX_TRUNCATE ZIL
-			 * record; matches zfs_space().
+			 * Extend the file, logged as zfs_space() would.
+			 * zfs_grow() never shrinks it: a write may have
+			 * extended it past offset + len since olen was read.
 			 */
-			error = -zfs_freesp(zp, offset + len, 0, 0, TRUE);
+			error = -zfs_grow(zp, offset + len);
 			zfs_exit(zfsvfs, FTAG);
 		}
 	}

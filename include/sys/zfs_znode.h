@@ -286,6 +286,7 @@ extern void	zfs_tstamp_update_setup(znode_t *, uint_t, uint64_t [2],
     uint64_t [2]);
 extern void	zfs_grow_blocksize(znode_t *, uint64_t, dmu_tx_t *);
 extern int	zfs_freesp(znode_t *, uint64_t, uint64_t, int, boolean_t);
+extern int	zfs_grow(znode_t *, uint64_t);
 extern void	zfs_znode_init(void);
 extern void	zfs_znode_fini(void);
 extern int	zfs_znode_hold_compare(const void *, const void *);

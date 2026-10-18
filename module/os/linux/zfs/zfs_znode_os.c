@@ -1522,15 +1522,46 @@ zfs_grow_blocksize(znode_t *zp, uint64_t size, dmu_tx_t *tx)
 }
 
 /*
+ * Update the timestamps and sequence number of a file whose size or
+ * contents zfs_freesp() changed, and log the change as a TX_TRUNCATE of
+ * (off, len), in the caller's tx.  Callers that change the size do this
+ * under their range lock, so the record is ordered against the TX_WRITEs
+ * of concurrent writers as the change itself is.
+ */
+static void
+zfs_freesp_log_tx(znode_t *zp, dmu_tx_t *tx, uint64_t off, uint64_t len)
+{
+	zfsvfs_t *zfsvfs = ZTOZSB(zp);
+	uint64_t mtime[2], ctime[2];
+	sa_bulk_attr_t bulk[4];
+	int count = 0;
+
+	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MTIME(zfsvfs), NULL, mtime, 16);
+	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_CTIME(zfsvfs), NULL, ctime, 16);
+	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zfsvfs),
+	    NULL, &zp->z_pflags, 8);
+	zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime);
+	ZFS_PERSIST_SEQ(zp, bulk, count);
+	ASSERT3S(count, <=, ARRAY_SIZE(bulk));
+	VERIFY0(sa_bulk_update(zp->z_sa_hdl, bulk, count, tx));
+
+	zfs_log_truncate(zfsvfs->z_log, tx, TX_TRUNCATE, zp, off, len);
+}
+
+/*
  * Increase the file length
  *
  *	IN:	zp	- znode of file to free data in.
  *		end	- new end-of-file
+ *		log	- log the change, as a TX_TRUNCATE of (off, len)
+ *
+ *	OUT:	extended - whether the size changed
  *
  *	RETURN:	0 on success, error code on failure
  */
 static int
-zfs_extend(znode_t *zp, uint64_t end)
+zfs_extend(znode_t *zp, uint64_t end, boolean_t log, uint64_t off,
+    uint64_t len, boolean_t *extended)
 {
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
 	dmu_tx_t *tx;
@@ -1543,6 +1574,8 @@ zfs_extend(znode_t *zp, uint64_t end)
 	 */
 	lr = zfs_rangelock_enter(&zp->z_rangelock, 0, UINT64_MAX, RL_WRITER);
 
+	*extended = B_FALSE;
+
 	/*
 	 * Nothing to do if file already at desired length.
 	 */
@@ -1551,7 +1584,7 @@ zfs_extend(znode_t *zp, uint64_t end)
 		return (0);
 	}
 	tx = dmu_tx_create(zfsvfs->z_os);
-	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
+	dmu_tx_hold_sa(tx, zp->z_sa_hdl, log ? ZFS_SEQ_MAY_GROW(zp) : B_FALSE);
 	zfs_sa_upgrade_txholds(tx, zp);
 	if (end > zp->z_blksz &&
 	    (!ISP2(zp->z_blksz) || zp->z_blksz < zfsvfs->z_max_blksz)) {
@@ -1589,10 +1622,14 @@ zfs_extend(znode_t *zp, uint64_t end)
 	VERIFY0(sa_update(zp->z_sa_hdl, SA_ZPL_SIZE(ZTOZSB(zp)),
 	    &zp->z_size, sizeof (zp->z_size), tx));
 
+	if (log)
+		zfs_freesp_log_tx(zp, tx, off, len);
+
 	zfs_rangelock_exit(lr);
 
 	dmu_tx_commit(tx);
 
+	*extended = B_TRUE;
 	return (0);
 }
 
@@ -1724,11 +1761,14 @@ zfs_free_range(znode_t *zp, uint64_t off, uint64_t len)
  *
  *	IN:	zp	- znode of file to free data in.
  *		end	- new end-of-file.
+ *		log	- log the change, as a TX_TRUNCATE of (end, 0)
+ *
+ *	OUT:	truncated - whether the size changed
  *
  *	RETURN:	0 on success, error code on failure
  */
 static int
-zfs_trunc(znode_t *zp, uint64_t end)
+zfs_trunc(znode_t *zp, uint64_t end, boolean_t log, boolean_t *truncated)
 {
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
 	dmu_tx_t *tx;
@@ -1742,12 +1782,28 @@ zfs_trunc(znode_t *zp, uint64_t end)
 	 */
 	lr = zfs_rangelock_enter(&zp->z_rangelock, 0, UINT64_MAX, RL_WRITER);
 
+	*truncated = B_FALSE;
+
 	/*
-	 * Nothing to do if file already at desired length.
+	 * Nothing to free if file already at desired length, but a logged
+	 * truncate (e.g. open with O_TRUNC) still updates the timestamps.
 	 */
 	if (end >= zp->z_size) {
+		error = 0;
+		if (log && end == zp->z_size) {
+			tx = dmu_tx_create(zfsvfs->z_os);
+			dmu_tx_hold_sa(tx, zp->z_sa_hdl, ZFS_SEQ_MAY_GROW(zp));
+			zfs_sa_upgrade_txholds(tx, zp);
+			error = dmu_tx_assign(tx, DMU_TX_WAIT);
+			if (error == 0) {
+				zfs_freesp_log_tx(zp, tx, end, 0);
+				dmu_tx_commit(tx);
+			} else {
+				dmu_tx_abort(tx);
+			}
+		}
 		zfs_rangelock_exit(lr);
-		return (0);
+		return (error);
 	}
 
 	error = dmu_free_long_range(zfsvfs->z_os, zp->z_id, end,
@@ -1757,7 +1813,7 @@ zfs_trunc(znode_t *zp, uint64_t end)
 		return (error);
 	}
 	tx = dmu_tx_create(zfsvfs->z_os);
-	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
+	dmu_tx_hold_sa(tx, zp->z_sa_hdl, log ? ZFS_SEQ_MAY_GROW(zp) : B_FALSE);
 	zfs_sa_upgrade_txholds(tx, zp);
 	dmu_tx_mark_netfree(tx);
 	error = dmu_tx_assign(tx, DMU_TX_WAIT);
@@ -1778,9 +1834,13 @@ zfs_trunc(znode_t *zp, uint64_t end)
 	}
 	VERIFY0(sa_bulk_update(zp->z_sa_hdl, bulk, count, tx));
 
+	if (log)
+		zfs_freesp_log_tx(zp, tx, end, 0);
+
 	dmu_tx_commit(tx);
 	zfs_rangelock_exit(lr);
 
+	*truncated = B_TRUE;
 	return (0);
 }
 
@@ -1800,68 +1860,76 @@ zfs_freesp(znode_t *zp, uint64_t off, uint64_t len, int flag, boolean_t log)
 {
 	dmu_tx_t *tx;
 	zfsvfs_t *zfsvfs = ZTOZSB(zp);
-	zilog_t *zilog = zfsvfs->z_log;
+	boolean_t changed = B_FALSE;
 	uint64_t mode;
-	uint64_t mtime[2], ctime[2];
-	sa_bulk_attr_t bulk[4];
-	int count = 0;
 	int error;
 
 	if ((error = sa_lookup(zp->z_sa_hdl, SA_ZPL_MODE(zfsvfs), &mode,
 	    sizeof (mode))) != 0)
 		return (error);
 
+	/*
+	 * zfs_extend() and zfs_trunc() recheck the size under the range
+	 * lock, and log there: a write may extend the file at any time.
+	 */
 	if (off > zp->z_size) {
-		error =  zfs_extend(zp, off+len);
-		if (error == 0 && log)
-			goto log;
-		goto out;
+		error = zfs_extend(zp, off + len, log, off, len, &changed);
+		if (error == 0 && changed)
+			zfs_znode_update_vfs(zp);
+		/* If a write got past off first, truncate to off below. */
+		if (error != 0 || changed || len != 0)
+			return (error);
 	}
 
 	if (len == 0) {
-		error = zfs_trunc(zp, off);
-	} else {
-		if ((error = zfs_free_range(zp, off, len)) == 0 &&
-		    off + len > zp->z_size)
-			error = zfs_extend(zp, off+len);
+		error = zfs_trunc(zp, off, log, &changed);
+		/*
+		 * Truncate the page cache with the purpose-built API, only
+		 * if the file shrank.  For punching operations, this is done
+		 * under a range lock in zfs_free_range().
+		 */
+		if (error == 0 && log)
+			zfs_znode_update_vfs(zp);
+		if (error == 0 && changed)
+			truncate_setsize(ZTOI(zp), off);
+		return (error);
 	}
+
+	if ((error = zfs_free_range(zp, off, len)) == 0 &&
+	    off + len > zp->z_size)
+		error = zfs_extend(zp, off + len, B_FALSE, 0, 0, &changed);
 	if (error || !log)
-		goto out;
-log:
+		return (error);
+
 	tx = dmu_tx_create(zfsvfs->z_os);
 	dmu_tx_hold_sa(tx, zp->z_sa_hdl, ZFS_SEQ_MAY_GROW(zp));
 	zfs_sa_upgrade_txholds(tx, zp);
 	error = dmu_tx_assign(tx, DMU_TX_WAIT);
 	if (error) {
 		dmu_tx_abort(tx);
-		goto out;
+		return (error);
 	}
-
-	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_MTIME(zfsvfs), NULL, mtime, 16);
-	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_CTIME(zfsvfs), NULL, ctime, 16);
-	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zfsvfs),
-	    NULL, &zp->z_pflags, 8);
-	zfs_tstamp_update_setup(zp, CONTENT_MODIFIED, mtime, ctime);
-	ZFS_PERSIST_SEQ(zp, bulk, count);
-	ASSERT3S(count, <=, ARRAY_SIZE(bulk));
-	error = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
-	ASSERT0(error);
-
-	zfs_log_truncate(zilog, tx, TX_TRUNCATE, zp, off, len);
-
+	zfs_freesp_log_tx(zp, tx, off, len);
 	dmu_tx_commit(tx);
 
 	zfs_znode_update_vfs(zp);
-	error = 0;
+	return (0);
+}
 
-out:
-	/*
-	 * Truncate the page cache - for file truncate operations, use
-	 * the purpose-built API for truncations.  For punching operations,
-	 * the truncation is handled under a range lock in zfs_free_range.
-	 */
-	if (len == 0)
-		truncate_setsize(ZTOI(zp), off);
+/*
+ * Extend a file to end if it is smaller, logged as zfs_freesp() logs an
+ * extension.  Unlike zfs_freesp(zp, end, 0, ...), never shrink it: a
+ * write may have extended it past end since the caller read its size.
+ */
+int
+zfs_grow(znode_t *zp, uint64_t end)
+{
+	boolean_t extended;
+	int error;
+
+	error = zfs_extend(zp, end, B_TRUE, end, 0, &extended);
+	if (error == 0 && extended)
+		zfs_znode_update_vfs(zp);
 	return (error);
 }
 
