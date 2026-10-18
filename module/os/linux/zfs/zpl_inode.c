@@ -67,10 +67,16 @@ zpl_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 	crhold(cr);
 	cookie = spl_fstrans_mark();
 
-	/* If we are a case insensitive fs, we need the real name */
-	if (zfsvfs->z_case == ZFS_CASE_INSENSITIVE) {
-		zfs_flags = FIGNORECASE;
+	/*
+	 * If names are matched case-insensitively or by their normalized
+	 * form, we need the real (stored) name, so that the dentry cache
+	 * only ever holds names as they are stored.  See below.
+	 */
+	if (zfsvfs->z_case == ZFS_CASE_INSENSITIVE || zfsvfs->z_norm) {
+		if (zfsvfs->z_case == ZFS_CASE_INSENSITIVE)
+			zfs_flags = FIGNORECASE;
 		pn_alloc(&pn);
+		pn.pn_buf[0] = '\0';
 		ppn = &pn;
 	}
 
@@ -86,9 +92,11 @@ zpl_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 
 	if (error) {
 		/*
-		 * If we have a case sensitive fs, we do not want to
-		 * insert negative entries, so return NULL for ENOENT.
-		 * Fall through if the error is not ENOENT. Also free memory.
+		 * If names are matched case-insensitively or by their
+		 * normalized form, we do not want to insert negative
+		 * entries: a later create under an equivalent name would
+		 * not replace them.  So return NULL for ENOENT.  Fall
+		 * through if the error is not ENOENT.  Also free memory.
 		 */
 		if (ppn) {
 			pn_free(ppn);
@@ -104,14 +112,17 @@ zpl_lookup(struct inode *dir, struct dentry *dentry, unsigned int flags)
 	ip = ZTOI(zp);
 
 	/*
-	 * If we are case insensitive, call the correct function
-	 * to install the name.
+	 * If names are matched case-insensitively or by their normalized
+	 * form, install the dentry under the stored name.  Otherwise an
+	 * equivalent name would become a second dentry for the inode,
+	 * which would still reach it after it is unlinked.
 	 */
 	if (ppn) {
 		struct dentry *new_dentry;
 		struct qstr ci_name;
 
-		if (strcmp(dname(dentry), pn.pn_buf) == 0) {
+		if (pn.pn_buf[0] == '\0' ||
+		    strcmp(dname(dentry), pn.pn_buf) == 0) {
 			new_dentry = d_splice_alias(ip,  dentry);
 		} else {
 			ci_name.name = pn.pn_buf;
@@ -323,10 +334,11 @@ zpl_unlink(struct inode *dir, struct dentry *dentry)
 	error = -zfs_remove(ITOZ(dir), dname(dentry), cr, 0);
 
 	/*
-	 * For a CI FS we must invalidate the dentry to prevent the
-	 * creation of negative entries.
+	 * For a CI or normalizing FS we must invalidate the dentry to
+	 * prevent the creation of negative entries.
 	 */
-	if (error == 0 && zfsvfs->z_case == ZFS_CASE_INSENSITIVE)
+	if (error == 0 && (zfsvfs->z_case == ZFS_CASE_INSENSITIVE ||
+	    zfsvfs->z_norm))
 		d_invalidate(dentry);
 
 	spl_fstrans_unmark(cookie);
@@ -402,10 +414,11 @@ zpl_rmdir(struct inode *dir, struct dentry *dentry)
 	error = -zfs_rmdir(ITOZ(dir), dname(dentry), NULL, cr, 0);
 
 	/*
-	 * For a CI FS we must invalidate the dentry to prevent the
-	 * creation of negative entries.
+	 * For a CI or normalizing FS we must invalidate the dentry to
+	 * prevent the creation of negative entries.
 	 */
-	if (error == 0 && zfsvfs->z_case == ZFS_CASE_INSENSITIVE)
+	if (error == 0 && (zfsvfs->z_case == ZFS_CASE_INSENSITIVE ||
+	    zfsvfs->z_norm))
 		d_invalidate(dentry);
 
 	spl_fstrans_unmark(cookie);
