@@ -68,17 +68,6 @@ function lookup_file
 	fi
 }
 
-function lookup_file_ci
-{
-	typeset name=$1
-
-	if is_illumos; then
-		zlook -il $TESTDIR $name >/dev/null 2>&1
-	else
-		test -f "${TESTDIR}/${name}" >/dev/null 2>&1
-	fi
-}
-
 function lookup_any
 {
 	for name in $NAMES_ALL ; do

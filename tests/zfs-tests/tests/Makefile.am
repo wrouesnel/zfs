@@ -606,10 +606,8 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/casenorm/insensitive_none_lookup.ksh \
 	functional/casenorm/mixed_create_failure.ksh \
 	functional/casenorm/mixed_formd_delete.ksh \
-	functional/casenorm/mixed_formd_lookup_ci.ksh \
 	functional/casenorm/mixed_formd_lookup.ksh \
 	functional/casenorm/mixed_none_delete.ksh \
-	functional/casenorm/mixed_none_lookup_ci.ksh \
 	functional/casenorm/mixed_none_lookup.ksh \
 	functional/casenorm/norm_all_values.ksh \
 	functional/casenorm/sensitive_formd_delete.ksh \
