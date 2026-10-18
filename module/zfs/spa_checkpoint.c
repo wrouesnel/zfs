@@ -130,6 +130,7 @@
 
 #include <sys/dmu_tx.h>
 #include <sys/dsl_dir.h>
+#include <sys/dsl_scan.h>
 #include <sys/dsl_synctask.h>
 #include <sys/metaslab_impl.h>
 #include <sys/spa.h>
@@ -186,6 +187,14 @@ spa_checkpoint_discard_complete_sync(void *arg, dmu_tx_t *tx)
 
 	spa_history_log_internal(spa, "spa discard checkpoint", tx,
 	    "finished discarding checkpointed state from the pool");
+
+	/*
+	 * A resilver that completed while the checkpoint existed could
+	 * not clear the DTLs; resilver again now that it is gone.
+	 */
+	if (!dsl_scan_resilvering(spa->spa_dsl_pool) &&
+	    vdev_resilver_needed(spa->spa_root_vdev, NULL, NULL))
+		spa_async_request(spa, SPA_ASYNC_RESILVER);
 }
 
 typedef struct spa_checkpoint_discard_sync_callback_arg {

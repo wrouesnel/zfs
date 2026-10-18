@@ -1194,6 +1194,27 @@ dsl_errorscrub_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 	ASSERT(!dsl_errorscrubbing(scn->scn_dp));
 }
 
+/*
+ * A scan that completes while the pool has a checkpoint leaves the DTLs
+ * alone (see dsl_scan_done()).  Restarting the resilver for those DTLs
+ * would only skip the same checkpointed blocks again and restart
+ * forever, so restart only if a DTL holds txgs this scan did not cover.
+ * The checkpoint discard starts the resilver for the rest.
+ */
+static boolean_t
+dsl_scan_checkpoint_kept_dtl(dsl_scan_t *scn, boolean_t complete)
+{
+	spa_t *spa = scn->scn_dp->dp_spa;
+	uint64_t min, max;
+
+	if (!complete ||
+	    !spa_feature_is_active(spa, SPA_FEATURE_POOL_CHECKPOINT))
+		return (B_FALSE);
+	if (!vdev_resilver_needed(spa->spa_root_vdev, &min, &max))
+		return (B_FALSE);
+	return (max <= scn->scn_phys.scn_max_txg);
+}
+
 static void
 dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 {
@@ -1334,7 +1355,8 @@ dsl_scan_done(dsl_scan_t *scn, boolean_t complete, dmu_tx_t *tx)
 		 * and start the resilver then.
 		 */
 		if (spa_feature_is_enabled(spa, SPA_FEATURE_RESILVER_DEFER) &&
-		    vdev_clear_resilver_deferred(spa->spa_root_vdev, tx)) {
+		    vdev_clear_resilver_deferred(spa->spa_root_vdev, tx) &&
+		    !dsl_scan_checkpoint_kept_dtl(scn, complete)) {
 			spa_history_log_internal(spa,
 			    "starting deferred resilver", tx, "errors=%llu",
 			    (u_longlong_t)spa_approx_errlog_size(spa));
