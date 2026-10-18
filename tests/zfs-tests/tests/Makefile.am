@@ -1719,6 +1719,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/failmode/failmode_dio_unwritable.ksh \
 	functional/failmode/setup.ksh \
 	functional/fallocate/cleanup.ksh \
+	functional/fallocate/fallocate_append_race.ksh \
 	functional/fallocate/fallocate_extend_timestamps.ksh \
 	functional/fallocate/fallocate_prealloc.ksh \
 	functional/fallocate/fallocate_punch-hole.ksh \

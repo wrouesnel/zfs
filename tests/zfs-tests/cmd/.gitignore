@@ -9,6 +9,7 @@
 /devname2devid
 /dir_rd_update
 /draid
+/falloc_append_race
 /file_fadvise
 /file_append
 /file_check
