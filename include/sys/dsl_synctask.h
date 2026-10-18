@@ -28,7 +28,7 @@ struct dsl_pool;
 
 typedef int (dsl_checkfunc_t)(void *, dmu_tx_t *);
 typedef void (dsl_syncfunc_t)(void *, dmu_tx_t *);
-typedef void (dsl_sigfunc_t)(void *, dmu_tx_t *);
+typedef void (dsl_sigfunc_t)(void *);
 
 typedef enum zfs_space_check {
 	/*

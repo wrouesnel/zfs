@@ -81,7 +81,7 @@ top:
 		if (err != 0) {
 			VERIFY3U(err, ==, EINTR);
 			/* current contract is to call func once */
-			sigfunc(arg, tx);
+			sigfunc(arg);
 			/* in case we're performing an EAGAIN retry */
 			sigfunc = NULL;
 

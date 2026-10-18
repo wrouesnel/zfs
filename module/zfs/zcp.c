@@ -971,9 +971,8 @@ zcp_pool_error(zcp_run_info_t *ri, const char *poolname, int error)
  * after calling this callback.
  */
 static void
-zcp_eval_sig(void *arg, dmu_tx_t *tx)
+zcp_eval_sig(void *arg)
 {
-	(void) tx;
 	zcp_run_info_t *ri = arg;
 
 	ri->zri_canceled = B_TRUE;
