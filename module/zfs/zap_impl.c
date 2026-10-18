@@ -93,11 +93,22 @@ zap_name_alloc_str(zap_t *zap, const char *key, matchtype_t mt)
 {
 	size_t key_len = strlen(key) + 1;
 	zap_name_t *zn = zap_name_alloc(zap, (key_len > ZAP_MAXNAMELEN));
-	if (zap_name_init_str(zn, key, mt) != 0) {
+	if (zap_name_init_str(zn, key, mt) == 0)
+		return (zn);
+
+	/*
+	 * Normalization can make a name longer than ZAP_MAXNAMELEN although
+	 * the name itself fits (formD splits each Hangul syllable into two
+	 * or three jamo), so retry with the long buffer.
+	 */
+	if (zap->zap_normflags != 0 && zn->zn_normbuf_len == ZAP_MAXNAMELEN) {
 		zap_name_free(zn);
-		return (NULL);
+		zn = zap_name_alloc(zap, B_TRUE);
+		if (zap_name_init_str(zn, key, mt) == 0)
+			return (zn);
 	}
-	return (zn);
+	zap_name_free(zn);
+	return (NULL);
 }
 
 zap_name_t *
