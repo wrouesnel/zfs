@@ -190,6 +190,18 @@ find_shares_object(differ_info_t *di)
 	(void) strlcat(fullpath, ZDIFF_SHARESDIR, MAXPATHLEN);
 
 	if (stat64(fullpath, &sb) != 0) {
+		/*
+		 * A user with the diff permission may not be able to
+		 * search the mountpoint.  The shares directory is only
+		 * looked up to leave it out of the output, and Linux
+		 * neither creates one (the stat then reports a placeholder
+		 * inode) nor changes one made elsewhere, so carry on
+		 * without it, as FreeBSD always does.
+		 */
+		if (errno == EACCES || errno == EPERM) {
+			di->shares = 0;
+			return (0);
+		}
 		(void) snprintf(di->errbuf, sizeof (di->errbuf),
 		    "Cannot stat %s", fullpath);
 		return (zfs_error(di->zhp->zfs_hdl, EZFS_DIFF, di->errbuf));
