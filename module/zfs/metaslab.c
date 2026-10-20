@@ -5430,8 +5430,13 @@ metaslab_alloc_dva_range(spa_t *spa, metaslab_class_t *mc, uint64_t psize,
 	 * and a large number of split blocks coupled with ztest-induced
 	 * damage can result in extremely long reconstruction times.  This
 	 * will also test spilling from special to normal.
+	 *
+	 * Only fail allocations that zio can turn into gang blocks: a gang
+	 * header, or a block no larger than the minimum allocation size,
+	 * would fail its write instead.
 	 */
 	if (psize >= metaslab_force_ganging &&
+	    psize > spa->spa_min_alloc && !(flags & METASLAB_GANG_HEADER) &&
 	    metaslab_force_ganging_pct > 0 &&
 	    (random_in_range(100) < MIN(metaslab_force_ganging_pct, 100))) {
 		metaslab_trace_add(zal, NULL, NULL, psize, d, TRACE_FORCE_GANG,

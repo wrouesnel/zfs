@@ -286,6 +286,8 @@ faster metaslab groups, but if not, try to evenly distribute the allocations.
 .
 .It Sy metaslab_force_ganging Ns = Ns Sy 16777217 Ns B Po 16 MiB + 1 B Pc Pq u64
 Make some blocks above a certain size be gang blocks.
+Blocks no larger than the pool's minimum allocation size, which can't be
+ganged, and gang headers are never forced.
 This option is used by the test suite to facilitate testing.
 .
 .It Sy metaslab_force_ganging_pct Ns = Ns Sy 3 Ns % Pq uint
