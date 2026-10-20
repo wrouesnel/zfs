@@ -5041,7 +5041,13 @@ dsl_scan_scrub_cb(dsl_pool_t *dp,
 			    phys_birth);
 	}
 
-	if (needs_io && !zfs_no_scrub_io) {
+	/*
+	 * zfs_no_scrub_io only applies to scrubs.  Skipping a resilver's
+	 * I/O would still let it complete and clear the DTLs, leaving the
+	 * new device marked as a full copy without the data.
+	 */
+	if (needs_io && (!zfs_no_scrub_io ||
+	    scn->scn_phys.scn_func == POOL_SCAN_RESILVER)) {
 		dsl_scan_enqueue(dp, bp, zio_flags, zb);
 	} else {
 		count_block_skipped(scn, bp, B_TRUE);
