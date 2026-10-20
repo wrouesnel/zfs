@@ -820,6 +820,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_destroy/zfs_destroy_clone_livelist.ksh \
 	functional/cli_root/zfs_destroy/zfs_destroy_dev_removal_condense.ksh \
 	functional/cli_root/zfs_destroy/zfs_destroy_dev_removal.ksh \
+	functional/cli_root/zfs_destroy/zfs_destroy_dryrun_clones.ksh \
 	functional/cli_root/zfs_diff/cleanup.ksh \
 	functional/cli_root/zfs_diff/setup.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_changes.ksh \
