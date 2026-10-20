@@ -4440,6 +4440,25 @@ error:
 }
 
 /*
+ * Return true if the snapshots of filesystem 'name' changed since
+ * 'snapchanged' (its snapshots_changed time, in nanoseconds).
+ */
+static boolean_t
+recv_snapshots_changed(libzfs_handle_t *hdl, const char *name,
+    uint64_t snapchanged)
+{
+	zfs_handle_t *zhp;
+	boolean_t changed;
+
+	if ((zhp = make_dataset_handle(hdl, name)) == NULL)
+		return (B_FALSE);
+	changed = zfs_prop_get_int(zhp, ZFS_PROP_SNAPSHOTS_CHANGED_NSECS) !=
+	    snapchanged;
+	zfs_close(zhp);
+	return (changed);
+}
+
+/*
  * Restores a backup of tosnap from the file descriptor specified by infd.
  */
 static int
@@ -4479,6 +4498,7 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 	boolean_t toplevel = B_FALSE;
 	boolean_t zoned = B_FALSE;
 	boolean_t hastoken = B_FALSE;
+	uint64_t snapchanged = 0;
 	boolean_t redacted;
 	uint8_t *wkeydata = NULL;
 	uint_t wkeylen = 0;
@@ -4831,6 +4851,53 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 			err = -1;
 			goto out;
 		}
+
+		/*
+		 * A resume stream continues the interrupted receive whose
+		 * state the destination holds: check it holds one, and that
+		 * it is this one.  The kernel would only say EINVAL.  A
+		 * token taken from a child of a send -R | receive -s is
+		 * easily resumed into the top-level filesystem instead.
+		 */
+		if (resuming) {
+			char token[ZFS_MAXPROPLEN];
+			nvlist_t *tnv = NULL;
+			uint64_t toguid = 0;
+
+			if (zfs_prop_get(zhp, ZFS_PROP_RECEIVE_RESUME_TOKEN,
+			    token, sizeof (token), NULL, NULL, 0,
+			    B_TRUE) != 0 || token[0] == '\0' ||
+			    strcmp(token, "-") == 0) {
+				zfs_close(zhp);
+				zfs_error_aux(hdl, "destination '%s' has no "
+				    "partially received stream to resume\n"
+				    "(was the interrupted receive into one of "
+				    "its descendants? see their "
+				    "receive_resume_token)", name);
+				err = zfs_error(hdl, EZFS_BADSTREAM, errbuf);
+				goto out;
+			}
+			tnv = zfs_send_resume_token_to_nvlist(hdl, token);
+			if (tnv != NULL &&
+			    nvlist_lookup_uint64(tnv, "toguid", &toguid) == 0 &&
+			    toguid != drrb->drr_toguid) {
+				fnvlist_free(tnv);
+				zfs_close(zhp);
+				zfs_error_aux(hdl, "the stream does not resume "
+				    "the receive that was interrupted on '%s'",
+				    name);
+				err = zfs_error(hdl, EZFS_BADSTREAM, errbuf);
+				goto out;
+			}
+			fnvlist_free(tnv);
+		}
+
+		/*
+		 * Remembered to tell, if the receive fails, whether a
+		 * snapshot was created or destroyed meanwhile.
+		 */
+		snapchanged = zfs_prop_get_int(zhp,
+		    ZFS_PROP_SNAPSHOTS_CHANGED_NSECS);
 
 		/*
 		 * When receiving full/newfs on existing dataset, then it
@@ -5254,6 +5321,11 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 				zfs_error_aux(hdl,
 				    "incompatible embedded data stream "
 				    "feature with encrypted receive.");
+			} else if (ioctl_errno == EINVAL && snapchanged != 0 &&
+			    recv_snapshots_changed(hdl, name, snapchanged)) {
+				zfs_error_aux(hdl, "snapshots of '%s' changed "
+				    "during the receive (one was created or "
+				    "destroyed)", name);
 			} else if (ioctl_errno == EINVAL && flags->resumable) {
 				zfs_error_aux(hdl,
 				    "kernel modules must be upgraded to "
