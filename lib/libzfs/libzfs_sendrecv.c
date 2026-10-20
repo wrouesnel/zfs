@@ -77,6 +77,8 @@ typedef struct progress_arg {
 	boolean_t pa_astitle;
 	boolean_t pa_progress;
 	uint64_t pa_size;
+	uint64_t pa_base;	/* sent by earlier streams of this send */
+	uint64_t pa_bytes;	/* last progress seen of this stream */
 } progress_arg_t;
 
 static int
@@ -763,6 +765,7 @@ typedef struct send_dump_data {
 	int cleanup_fd;
 	int verbosity;
 	uint64_t size;
+	uint64_t sent;	/* estimated size of the streams already sent */
 } send_dump_data_t;
 
 static int
@@ -1015,6 +1018,7 @@ send_progress_thread(void *arg)
 			/* Use break to reach pthread_cleanup_pop() below. */
 			break;
 		}
+		pa->pa_bytes = bytes;
 
 		(void) time(&t);
 		localtime_r(&t, &tm);
@@ -1022,10 +1026,11 @@ send_progress_thread(void *arg)
 		if (pa->pa_astitle) {
 			char buf_bytes[16];
 			char buf_size[16];
+			uint64_t sent = pa->pa_base + bytes;
 			int pct;
-			zfs_nicenum(bytes, buf_bytes, sizeof (buf_bytes));
+			zfs_nicenum(sent, buf_bytes, sizeof (buf_bytes));
 			zfs_nicenum(pa->pa_size, buf_size, sizeof (buf_size));
-			pct = (total > 0) ? bytes / total : 100;
+			pct = (total > 0) ? sent / total : 100;
 			zfs_setproctitle("sending %s (%d%%: %s/%s)",
 			    zhp->zfs_name, MIN(pct, 100), buf_bytes, buf_size);
 		}
@@ -1236,8 +1241,13 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 	fromorigin = sdd->prevsnap[0] == '\0' &&
 	    (sdd->fromorigin || sdd->replicate);
 
-	if (sdd->verbosity != 0) {
-		uint64_t size = 0;
+	/*
+	 * The process title (-V) shows the progress of the whole send, so
+	 * the real run also needs each stream's estimate, to add up what
+	 * the earlier streams sent.
+	 */
+	uint64_t size = 0;
+	if (sdd->verbosity != 0 || (!sdd->dryrun && sdd->progressastitle)) {
 		char fromds[ZFS_MAX_DATASET_NAME_LEN];
 		const char *from = NULL;
 
@@ -1248,7 +1258,9 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 			from = fromds;
 		}
 		if (zfs_send_space(zhp, zhp->zfs_name, from, flags,
-		    &size) == 0) {
+		    &size) != 0)
+			size = 0;
+		else if (sdd->verbosity != 0) {
 			send_print_verbose(fout, zhp->zfs_name,
 			    sdd->prevsnap[0] ? sdd->prevsnap : NULL,
 			    size, sdd->parsable);
@@ -1269,6 +1281,7 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 			pa.pa_estimate = B_FALSE;
 			pa.pa_verbosity = sdd->verbosity;
 			pa.pa_size = sdd->size;
+			pa.pa_base = sdd->sent;
 			pa.pa_astitle = sdd->progressastitle;
 			pa.pa_progress = sdd->progress;
 
@@ -1285,6 +1298,8 @@ dump_snapshot(zfs_handle_t *zhp, void *arg)
 
 		if (send_progress_thread_exit(zhp->zfs_hdl, tid, &oldmask))
 			return (-1);
+		/* never less than what the title already showed */
+		sdd->sent += MAX(size, pa.pa_bytes);
 	}
 
 	(void) strlcpy(sdd->prevsnap, thissnap, sizeof (sdd->prevsnap));
