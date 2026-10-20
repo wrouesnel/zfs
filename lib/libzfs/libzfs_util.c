@@ -34,6 +34,7 @@
 #include <strings.h>
 #include <unistd.h>
 #include <math.h>
+#include <wchar.h>
 #if LIBFETCH_DYNAMIC
 #include <dlfcn.h>
 #endif
@@ -1543,6 +1544,36 @@ err:
 }
 
 /*
+ * Print str left-justified in a column of width display columns.  printf's
+ * field width counts bytes, which misaligns values with multibyte
+ * characters.  The column widths themselves count bytes, which is never
+ * less than the display width.
+ */
+static int
+zprop_display_width(const char *str)
+{
+	size_t n = mbstowcs(NULL, str, 0);
+	wchar_t *wcs;
+	int w;
+
+	if (n == (size_t)-1 || n == strlen(str) ||
+	    (wcs = calloc(n + 1, sizeof (wchar_t))) == NULL)
+		return (strlen(str));
+	(void) mbstowcs(wcs, str, n + 1);
+	w = wcswidth(wcs, n);
+	free(wcs);
+	return (w < 0 ? strlen(str) : w);
+}
+
+static void
+zprop_print_padded(const char *str, int width)
+{
+	int pad = width - zprop_display_width(str);
+
+	(void) printf("%s%*s", str, pad > 0 ? pad : 0, "");
+}
+
+/*
  * Display a single line of output, according to the settings in the callback
  * structure.
  */
@@ -1624,10 +1655,11 @@ zprop_print_one_property(const char *name, zprop_get_cbdata_t *cbp,
 			(void) printf("%s", str);
 		else if (cbp->cb_scripted)
 			(void) printf("%s\t", str);
-		else
-			(void) printf("%-*s  ",
-			    cbp->cb_colwidths[cbp->cb_columns[i]],
-			    str);
+		else {
+			zprop_print_padded(str,
+			    cbp->cb_colwidths[cbp->cb_columns[i]]);
+			(void) printf("  ");
+		}
 	}
 
 	(void) printf("\n");

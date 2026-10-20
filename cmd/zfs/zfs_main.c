@@ -39,6 +39,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 #include <unistd.h>
 #include <fcntl.h>
 #include <zone.h>
@@ -3688,6 +3689,41 @@ zfs_list_avail_color(zfs_handle_t *zhp)
 }
 
 /*
+ * Print str in a column of width display columns, left- or right-justified.
+ * printf's field width counts bytes, which misaligns values with multibyte
+ * characters.  The column widths themselves count bytes, which is never
+ * less than the display width.
+ */
+static int
+list_display_width(const char *str)
+{
+	size_t n = mbstowcs(NULL, str, 0);
+	wchar_t *wcs;
+	int w;
+
+	if (n == (size_t)-1 || n == strlen(str) ||
+	    (wcs = calloc(n + 1, sizeof (wchar_t))) == NULL)
+		return (strlen(str));
+	(void) mbstowcs(wcs, str, n + 1);
+	w = wcswidth(wcs, n);
+	free(wcs);
+	return (w < 0 ? strlen(str) : w);
+}
+
+static void
+list_print_padded(const char *str, int width, boolean_t right)
+{
+	int pad = width - list_display_width(str);
+
+	if (pad < 0)
+		pad = 0;
+	if (right)
+		(void) printf("%*s%s", pad, "", str);
+	else
+		(void) printf("%s%*s", str, pad, "");
+}
+
+/*
  * Given a dataset and a list of fields, print out all the properties according
  * to the described layout, or return an nvlist containing all the fields, later
  * to be printed out as JSON object.
@@ -3826,13 +3862,9 @@ collect_dataset(zfs_handle_t *zhp, list_cbdata_t *cb)
 			if (cb->cb_scripted || (pl->pl_next == NULL &&
 			    !right_justify))
 				(void) fputs(propstr, stdout);
-			else if (right_justify) {
-				(void) printf("%*s", (int)pl->pl_width,
-				    propstr);
-			} else {
-				(void) printf("%-*s", (int)pl->pl_width,
-				    propstr);
-			}
+			else
+				list_print_padded(propstr, (int)pl->pl_width,
+				    right_justify);
 
 			if (pl->pl_prop == ZFS_PROP_AVAILABLE)
 				color_end();
