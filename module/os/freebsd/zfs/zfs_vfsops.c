@@ -467,6 +467,28 @@ zfs_sync(vfs_t *vfsp, int waitfor)
 	return (0);
 }
 
+/*
+ * Set or clear a mount flag for a property change, and update the flags
+ * in the cached statfs as well.  getfsstat(MNT_NOWAIT), which libzfs and
+ * mount(8) use, returns the cached copy.  A stale copy makes a value
+ * inherited by a mounted descendant look like a temporary mount option.
+ */
+static void
+zfs_vfs_setflag(vfs_t *vfsp, uint64_t flag, boolean_t set)
+{
+	int locked;
+
+	if (!(locked = mtx_owned(MNT_MTX(vfsp))))
+		MNT_ILOCK(vfsp);
+	if (set)
+		vfsp->mnt_flag |= flag;
+	else
+		vfsp->mnt_flag &= ~flag;
+	vfsp->mnt_stat.f_flags = vfsp->mnt_flag & MNT_VISFLAGMASK;
+	if (!locked)
+		MNT_IUNLOCK(vfsp);
+}
+
 static void
 atime_changed_cb(void *arg, uint64_t newval)
 {
@@ -474,12 +496,12 @@ atime_changed_cb(void *arg, uint64_t newval)
 
 	if (newval == TRUE) {
 		zfsvfs->z_atime = TRUE;
-		zfsvfs->z_vfs->vfs_flag &= ~MNT_NOATIME;
+		zfs_vfs_setflag(zfsvfs->z_vfs, MNT_NOATIME, B_FALSE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_NOATIME);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_ATIME, NULL, 0);
 	} else {
 		zfsvfs->z_atime = FALSE;
-		zfsvfs->z_vfs->vfs_flag |= MNT_NOATIME;
+		zfs_vfs_setflag(zfsvfs->z_vfs, MNT_NOATIME, B_TRUE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_ATIME);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_NOATIME, NULL, 0);
 	}
@@ -526,13 +548,11 @@ readonly_changed_cb(void *arg, uint64_t newval)
 	zfsvfs_t *zfsvfs = arg;
 
 	if (newval) {
-		/* XXX locking on vfs_flag? */
-		zfsvfs->z_vfs->vfs_flag |= VFS_RDONLY;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_RDONLY, B_TRUE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_RW);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_RO, NULL, 0);
 	} else {
-		/* XXX locking on vfs_flag? */
-		zfsvfs->z_vfs->vfs_flag &= ~VFS_RDONLY;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_RDONLY, B_FALSE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_RO);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_RW, NULL, 0);
 	}
@@ -544,11 +564,11 @@ setuid_changed_cb(void *arg, uint64_t newval)
 	zfsvfs_t *zfsvfs = arg;
 
 	if (newval == FALSE) {
-		zfsvfs->z_vfs->vfs_flag |= VFS_NOSETUID;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_NOSETUID, B_TRUE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_SETUID);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_NOSETUID, NULL, 0);
 	} else {
-		zfsvfs->z_vfs->vfs_flag &= ~VFS_NOSETUID;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_NOSETUID, B_FALSE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_NOSETUID);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_SETUID, NULL, 0);
 	}
@@ -560,11 +580,11 @@ exec_changed_cb(void *arg, uint64_t newval)
 	zfsvfs_t *zfsvfs = arg;
 
 	if (newval == FALSE) {
-		zfsvfs->z_vfs->vfs_flag |= VFS_NOEXEC;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_NOEXEC, B_TRUE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_EXEC);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_NOEXEC, NULL, 0);
 	} else {
-		zfsvfs->z_vfs->vfs_flag &= ~VFS_NOEXEC;
+		zfs_vfs_setflag(zfsvfs->z_vfs, VFS_NOEXEC, B_FALSE);
 		vfs_clearmntopt(zfsvfs->z_vfs, MNTOPT_NOEXEC);
 		vfs_setmntopt(zfsvfs->z_vfs, MNTOPT_EXEC, NULL, 0);
 	}
