@@ -840,6 +840,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_get/zfs_get_008_pos.ksh \
 	functional/cli_root/zfs_get/zfs_get_009_pos.ksh \
 	functional/cli_root/zfs_get/zfs_get_010_neg.ksh \
+	functional/cli_root/zfs_get/zfs_get_multibyte.ksh \
 	functional/cli_root/zfs_ids_to_path/cleanup.ksh \
 	functional/cli_root/zfs_ids_to_path/setup.ksh \
 	functional/cli_root/zfs_ids_to_path/zfs_ids_to_path_001_pos.ksh \
