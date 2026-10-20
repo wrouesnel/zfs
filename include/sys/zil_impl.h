@@ -94,6 +94,7 @@ typedef enum {
 	LWB_FLAG_SLIM =		(1<<0),	/* log block has slim format */
 	LWB_FLAG_SLOG =		(1<<1),	/* lwb_blk is on SLOG device */
 	LWB_FLAG_CRASHED =	(1<<2),	/* lwb is on the crash list */
+	LWB_FLAG_ABORTED =	(1<<3),	/* issue lwb as a failed write */
 } lwb_flag_t;
 
 typedef struct lwb {
