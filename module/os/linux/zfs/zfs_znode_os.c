@@ -620,9 +620,17 @@ zfs_znode_alloc(zfsvfs_t *zfsvfs, dmu_buf_t *db, int blksz,
 	 * can happen asynchronously, we can't guarantee they've been
 	 * unhashed.  This can cause hash collisions in unlinked drain
 	 * processing so do not hash unlinked znodes.
+	 *
+	 * The kernel does not put an unhashed inode on the writeback list
+	 * (__mark_inode_dirty()), so pages dirtied through a mapping of an
+	 * O_TMPFILE file would never be written back, and are lost once the
+	 * file is linked and unmounted.  Make unlinked inodes look hashed
+	 * without adding them to the hash table, as inode_fake_hash() does.
 	 */
 	if (links > 0)
 		VERIFY0(insert_inode_locked(ip));
+	else
+		hlist_add_fake(&ip->i_hash);
 
 	mutex_enter(&zfsvfs->z_znodes_lock);
 	list_insert_tail(&zfsvfs->z_all_znodes, zp);
