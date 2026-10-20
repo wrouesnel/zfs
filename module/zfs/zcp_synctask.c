@@ -170,6 +170,45 @@ static const zcp_synctask_info_t zcp_synctask_destroy_info = {
 	.blocks_modified = 0
 };
 
+/*
+ * The destroy check functions treat a snapshot or bookmark that does not
+ * exist as already destroyed, so that the ioctls can destroy lists of
+ * them.  A channel program names exactly one, so report it missing, as
+ * dsl_destroy_head_check() does for a filesystem.
+ */
+static int
+zcp_destroy_snapshot_check(void *arg, dmu_tx_t *tx)
+{
+	dsl_destroy_snapshot_arg_t *ddsa = arg;
+	dsl_dataset_t *ds;
+	int error;
+
+	error = dsl_dataset_hold(dmu_tx_pool(tx), ddsa->ddsa_name, FTAG, &ds);
+	if (error != 0)
+		return (error);
+	dsl_dataset_rele(ds, FTAG);
+
+	return (dsl_destroy_snapshot_check(arg, tx));
+}
+
+static int
+zcp_destroy_bookmark_check(void *arg, dmu_tx_t *tx)
+{
+	dsl_bookmark_destroy_arg_t *dbda = arg;
+	nvpair_t *pair = nvlist_next_nvpair(dbda->dbda_bmarks, NULL);
+	zfs_bookmark_phys_t bm;
+	int error;
+
+	error = dsl_bookmark_lookup(dmu_tx_pool(tx), nvpair_name(pair), NULL,
+	    &bm);
+	if (error == ESRCH)
+		error = SET_ERROR(ENOENT);
+	if (error != 0)
+		return (error);
+
+	return (dsl_bookmark_destroy_check(arg, tx));
+}
+
 static int
 zcp_synctask_destroy(lua_State *state, boolean_t sync, nvlist_t *err_details)
 {
@@ -194,7 +233,7 @@ zcp_synctask_destroy(lua_State *state, boolean_t sync, nvlist_t *err_details)
 			ddsa.ddsa_defer = B_FALSE;
 		}
 
-		err = zcp_sync_task(state, dsl_destroy_snapshot_check,
+		err = zcp_sync_task(state, zcp_destroy_snapshot_check,
 		    dsl_destroy_snapshot_sync, &ddsa, sync, dsname);
 	} else if (isbookmark) {
 		dsl_bookmark_destroy_arg_t dbda = { 0 };
@@ -208,7 +247,7 @@ zcp_synctask_destroy(lua_State *state, boolean_t sync, nvlist_t *err_details)
 		zcp_cleanup_handler_t *zch2 = zcp_register_cleanup(state,
 		    zcp_synctask_cleanup, dbda.dbda_success);
 
-		err = zcp_sync_task(state, dsl_bookmark_destroy_check,
+		err = zcp_sync_task(state, zcp_destroy_bookmark_check,
 		    dsl_bookmark_destroy_sync, &dbda, sync, dsname);
 
 		zcp_deregister_cleanup(state, zch2);
