@@ -17,7 +17,7 @@
 .\" Copyright 2017 Nexenta Systems, Inc.
 .\" Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
 .\"
-.Dd April 29, 2024
+.Dd October 20, 2026
 .Dt ZPOOL-CLEAR 8
 .Os
 .
@@ -45,6 +45,7 @@ enabled which have been suspended cannot be resumed when there is evidence
 that the pool was imported by another host.
 The same checks performed during an import will be applied before the clear
 proceeds.
+A pool imported read-only can only be cleared while it is suspended.
 .Bl -tag -width Ds
 .It Fl -power
 Power on the devices's slot in the storage enclosure and wait for the device

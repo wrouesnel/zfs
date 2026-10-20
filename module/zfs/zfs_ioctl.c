@@ -6635,6 +6635,14 @@ zfs_ioc_clear(zfs_cmd_t *zc)
 		spa_namespace_exit(FTAG);
 		return (SET_ERROR(EIO));
 	}
+	/*
+	 * A read-only pool has no device state to clear on disk, but failed
+	 * reads can still suspend it: then the clear is how it resumes.
+	 */
+	if (!spa_writeable(spa) && !spa_suspended(spa)) {
+		spa_namespace_exit(FTAG);
+		return (SET_ERROR(EROFS));
+	}
 	if (spa_get_log_state(spa) == SPA_LOG_MISSING) {
 		/* we need to let spa_open/spa_load clear the chains */
 		spa_set_log_state(spa, SPA_LOG_CLEAR);
@@ -8325,7 +8333,7 @@ zfs_ioctl_init(void)
 	    zfs_secpolicy_config, B_TRUE, POOL_CHECK_NONE);
 
 	zfs_ioctl_register_pool(ZFS_IOC_CLEAR, zfs_ioc_clear,
-	    zfs_secpolicy_config, B_TRUE, POOL_CHECK_READONLY);
+	    zfs_secpolicy_config, B_TRUE, POOL_CHECK_NONE);
 
 	zfs_ioctl_register_dataset_read(ZFS_IOC_SPACE_WRITTEN,
 	    zfs_ioc_space_written);

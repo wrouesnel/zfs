@@ -4982,11 +4982,14 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 
 		vd->vdev_forcefault = B_FALSE;
 
-		if (vd != rvd && vdev_writeable(vd->vdev_top))
+		/* A read-only pool can't write the new state (or resilver) */
+		if (vd != rvd && spa_writeable(spa) &&
+		    vdev_writeable(vd->vdev_top))
 			vdev_state_dirty(vd->vdev_top);
 
 		/* If a resilver isn't required, check if vdevs can be culled */
-		if (vd->vdev_aux == NULL && !vdev_is_dead(vd) &&
+		if (spa_writeable(spa) &&
+		    vd->vdev_aux == NULL && !vdev_is_dead(vd) &&
 		    !dsl_scan_resilvering(spa->spa_dsl_pool) &&
 		    !dsl_scan_resilver_scheduled(spa->spa_dsl_pool))
 			spa_async_request(spa, SPA_ASYNC_RESILVER_DONE);
