@@ -1008,6 +1008,17 @@ chauthtok_callback(pam_handle_t *pamh, zfs_key_config_t *config,
 	return (ret);
 }
 
+/* Callback counting the datasets that exist */
+static int
+exists_callback(pam_handle_t *pamh, zfs_key_config_t *config,
+    const char *dataset, void *data)
+{
+	(void) pamh, (void) config;
+	if (zfs_dataset_exists(g_zfs, dataset, ZFS_TYPE_FILESYSTEM))
+		(*(int *)data)++;
+	return (0);
+}
+
 __attribute__((visibility("default")))
 PAM_EXTERN int
 pam_sm_chauthtok(pam_handle_t *pamh, int flags,
@@ -1026,17 +1037,34 @@ pam_sm_chauthtok(pam_handle_t *pamh, int flags,
 		zfs_key_config_free(&config);
 		return (PAM_SERVICE_ERR);
 	}
+
+	if (pam_zfs_init(pamh) != 0) {
+		zfs_key_config_free(&config);
+		return (PAM_SERVICE_ERR);
+	}
+
+	/*
+	 * A user without a dataset (a new user getting a first password, or
+	 * one whose home isn't on ZFS) has no key to change: don't ask for
+	 * a current password that may not exist, and don't fail.
+	 */
+	int found = 0;
+	(void) foreach_dataset(pamh, &config, exists_callback, &found);
+	if (found == 0) {
+		pam_syslog(pamh, LOG_DEBUG,
+		    "no dataset for user '%s', ignoring", config.username);
+		pam_zfs_free();
+		zfs_key_config_free(&config);
+		return (PAM_IGNORE);
+	}
+
 	const pw_password_t *old_token = pw_get(pamh,
 	    PAM_OLDAUTHTOK, OLD_PASSWORD_VAR_NAME);
 
 	if (!old_token) {
 		pam_syslog(pamh, LOG_ERR,
 		    "old password from PAM stack is null");
-		zfs_key_config_free(&config);
-		return (PAM_SERVICE_ERR);
-	}
-
-	if (pam_zfs_init(pamh) != 0) {
+		pam_zfs_free();
 		zfs_key_config_free(&config);
 		return (PAM_SERVICE_ERR);
 	}
