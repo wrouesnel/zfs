@@ -642,6 +642,16 @@ sa_find_sizes(sa_os_t *sa, sa_bulk_attr_t *attr_desc, int attr_count,
 #define	BUF_SPACE_NEEDED(total, header) (total + header)
 
 /*
+ * Zero the bytes from start up to end, if there are any.
+ */
+static void
+sa_clear_tail(void *start, void *end)
+{
+	if ((uintptr_t)end > (uintptr_t)start)
+		memset(start, 0, (uintptr_t)end - (uintptr_t)start);
+}
+
+/*
  * Find layout that corresponds to ordering of attributes
  * If not found a new layout number is created and added to
  * persistent layout tables.
@@ -664,9 +674,11 @@ sa_build_layouts(sa_handle_t *hdl, sa_bulk_attr_t *attr_desc, int attr_count,
 	int used;
 	dmu_object_type_t bonustype;
 	sa_lot_t *lot;
+	uint8_t *pad_start;
 	int len_idx;
 	int spill_used;
 	int bonuslen;
+	int bonus_used;
 	boolean_t spilling;
 
 	dmu_buf_will_dirty(hdl->sa_bonus, tx);
@@ -681,9 +693,10 @@ sa_build_layouts(sa_handle_t *hdl, sa_bulk_attr_t *attr_desc, int attr_count,
 	if (used > SPA_OLD_MAXBLOCKSIZE)
 		return (SET_ERROR(EFBIG));
 
-	VERIFY0(dmu_set_bonus(hdl->sa_bonus, spilling ?
+	bonus_used = spilling ?
 	    MIN(bonuslen - sizeof (blkptr_t), used + hdrsize) :
-	    used + hdrsize, tx));
+	    used + hdrsize;
+	VERIFY0(dmu_set_bonus(hdl->sa_bonus, bonus_used, tx));
 
 	ASSERT((bonustype == DMU_OT_ZNODE && spilling == 0) ||
 	    bonustype == DMU_OT_SA);
@@ -731,6 +744,8 @@ sa_build_layouts(sa_handle_t *hdl, sa_bulk_attr_t *attr_desc, int attr_count,
 
 		if (spilling && i == spill_idx) { /* switch to spill buffer */
 			VERIFY(bonustype == DMU_OT_SA);
+			sa_clear_tail(data_start,
+			    (uint8_t *)hdl->sa_bonus->db_data + bonus_used);
 			if (buftype == SA_BONUS && !sa->sa_force_spill) {
 				sa_find_layout(hdl->sa_os, hash, attrs_start,
 				    lot_count, tx, &lot);
@@ -756,9 +771,23 @@ sa_build_layouts(sa_handle_t *hdl, sa_bulk_attr_t *attr_desc, int attr_count,
 		if (sa->sa_attr_table[attrs[i]].sa_length == 0) {
 			sahdr->sa_lengths[len_idx++] = length;
 		}
+		pad_start = (uint8_t *)data_start + length;
 		data_start = (void *)P2ROUNDUP(((uintptr_t)data_start +
 		    length), 8);
+		sa_clear_tail(pad_start, data_start);
 		lot_count++;
+	}
+
+	/*
+	 * The buffer may have held a larger layout: clear what this one
+	 * doesn't use, so the old attribute data isn't written out again.
+	 */
+	if (buftype == SA_SPILL) {
+		sa_clear_tail(data_start, (uint8_t *)hdl->sa_spill->db_data +
+		    hdl->sa_spill->db_size);
+	} else {
+		sa_clear_tail(data_start,
+		    (uint8_t *)hdl->sa_bonus->db_data + bonus_used);
 	}
 
 	sa_find_layout(hdl->sa_os, hash, attrs_start, lot_count, tx, &lot);
