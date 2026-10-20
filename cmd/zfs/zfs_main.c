@@ -1797,23 +1797,25 @@ zfs_do_destroy(int argc, char **argv)
 			}
 		}
 
-		if (!cb.cb_dryrun) {
-			if (cb.cb_doclones) {
-				cb.cb_batchedsnaps = fnvlist_alloc();
-				err = destroy_clones(&cb);
-				if (err == 0) {
-					err = zfs_destroy_snaps_nvl(g_zfs,
-					    cb.cb_batchedsnaps, B_FALSE);
-				}
-				if (err != 0) {
-					rv = 1;
-					goto out;
-				}
+		/*
+		 * A dry run walks the clones too, so that -v lists them;
+		 * destroy_callback() destroys nothing when cb_dryrun is set.
+		 */
+		if (cb.cb_doclones) {
+			cb.cb_batchedsnaps = fnvlist_alloc();
+			err = destroy_clones(&cb);
+			if (err == 0 && !cb.cb_dryrun) {
+				err = zfs_destroy_snaps_nvl(g_zfs,
+				    cb.cb_batchedsnaps, B_FALSE);
 			}
-			if (err == 0) {
-				err = zfs_destroy_snaps_nvl(g_zfs, cb.cb_nvl,
-				    cb.cb_defer_destroy);
+			if (err != 0) {
+				rv = 1;
+				goto out;
 			}
+		}
+		if (err == 0 && !cb.cb_dryrun) {
+			err = zfs_destroy_snaps_nvl(g_zfs, cb.cb_nvl,
+			    cb.cb_defer_destroy);
 		}
 
 		if (err != 0)
