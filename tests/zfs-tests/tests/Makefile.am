@@ -824,6 +824,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_diff/setup.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_changes.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_cliargs.ksh \
+	functional/cli_root/zfs_diff/zfs_diff_delegated.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_encrypted.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_mangle.ksh \
 	functional/cli_root/zfs_diff/zfs_diff_timestamp.ksh \
