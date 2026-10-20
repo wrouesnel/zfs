@@ -2255,6 +2255,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/rsend/send_encrypted_hierarchy.ksh \
 	functional/rsend/send_encrypted_holds.ksh \
 	functional/rsend/send_encrypted_props.ksh \
+	functional/rsend/send_encrypted_resume_token.ksh \
 	functional/rsend/send_encrypted_truncated_files.ksh \
 	functional/rsend/send_freeobjects.ksh \
 	functional/rsend/send_holds.ksh \
