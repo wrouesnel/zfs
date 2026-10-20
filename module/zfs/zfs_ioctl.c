@@ -7665,7 +7665,12 @@ zfs_ioc_send_space(const char *snapname, nvlist_t *innvl, nvlist_t *outnvl)
 		error = dmu_send_estimate_fast(tosnap, fromsnap,
 		    (from && strchr(fromname, '#') != NULL ? &zbm : NULL),
 		    compressok || rawok, savedok, &space);
-		space -= resume_bytes;
+		/*
+		 * The estimate can be smaller than what the interrupted
+		 * stream sent (it was uncompressed, or the estimate is
+		 * rough); don't let the remainder wrap around.
+		 */
+		space -= MIN(space, resume_bytes);
 		if (fromsnap != NULL)
 			dsl_dataset_rele(fromsnap, FTAG);
 		dsl_dataset_rele(tosnap, FTAG);

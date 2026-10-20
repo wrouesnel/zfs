@@ -1816,6 +1816,34 @@ lzc_flags_from_resume_nvl(nvlist_t *resume_nvl)
 	return (lzc_flags);
 }
 
+/*
+ * The size estimate of a resumed send is the estimate of the whole stream
+ * less the token's "bytes", the bytes the interrupted stream had sent.  If
+ * that stream sent uncompressed blocks and this one sends them compressed
+ * (-c or -w added on resume), "bytes" counts the wrong units: scale it by
+ * the ratio of the two streams' estimates.
+ */
+static uint64_t
+resume_bytes_estimate(zfs_handle_t *zhp, const char *from, int fd,
+    const char *redactbook, enum lzc_send_flags flags,
+    enum lzc_send_flags token_flags, uint64_t bytes)
+{
+	const enum lzc_send_flags sizeflags =
+	    LZC_SEND_FLAG_COMPRESS | LZC_SEND_FLAG_RAW;
+	uint64_t old_size, new_size;
+
+	if (bytes == 0 || ((flags ^ token_flags) & sizeflags) == 0)
+		return (bytes);
+
+	if (lzc_send_space_resume_redacted(zhp->zfs_name, from, token_flags,
+	    0, 0, 0, redactbook, fd, &old_size) != 0 ||
+	    lzc_send_space_resume_redacted(zhp->zfs_name, from, flags,
+	    0, 0, 0, redactbook, fd, &new_size) != 0 || old_size == 0)
+		return (bytes);
+
+	return ((uint64_t)((long double)bytes * new_size / old_size));
+}
+
 static int
 zfs_send_resume_impl_cb_impl(libzfs_handle_t *hdl, sendflags_t *flags,
     int outfd, nvlist_t *resume_nvl)
@@ -1934,7 +1962,10 @@ zfs_send_resume_impl_cb_impl(libzfs_handle_t *hdl, sendflags_t *flags,
 		if (lzc_flags & LZC_SEND_FLAG_SAVED)
 			tmpflags.saved = B_TRUE;
 		error = estimate_size(zhp, fromname, outfd, &tmpflags,
-		    resumeobj, resumeoff, bytes, redact_book, errbuf, &size);
+		    resumeobj, resumeoff,
+		    resume_bytes_estimate(zhp, fromname, outfd, redact_book,
+		    lzc_flags, lzc_flags_from_resume_nvl(resume_nvl), bytes),
+		    redact_book, errbuf, &size);
 	}
 
 	if (!flags->dryrun) {
