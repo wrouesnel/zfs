@@ -14,9 +14,12 @@
  * Copyright (c) 2018 by Delphix. All rights reserved.
  */
 
+#include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <unistd.h>
 #include <libzfs_core.h>
 #include <libzutil.h>
 
@@ -93,7 +96,6 @@ static const zfs_ioc_t ioc_skip[] = {
 	ZFS_IOC_VDEV_SPLIT,
 	ZFS_IOC_NEXT_OBJ,
 	ZFS_IOC_DIFF,
-	ZFS_IOC_TMP_SNAPSHOT,
 	ZFS_IOC_OBJ_TO_STATS,
 	ZFS_IOC_SPACE_WRITTEN,
 	ZFS_IOC_POOL_REGUID,
@@ -739,6 +741,133 @@ test_send_space(const char *snapshot1, const char *snapshot2)
 	nvlist_free(optional);
 }
 
+/*
+ * ZFS_IOC_TMP_SNAPSHOT is a legacy ioctl: zc_name names the filesystem and
+ * zc_value carries a prefix for the temporary snapshot name, which the
+ * kernel builds as "<prefix>-<16 hex digits>".  The prefix must be a valid
+ * snapshot name component, and the resulting full snapshot name must fit
+ * in ZFS_MAX_DATASET_NAME_LEN.  Anything else must be rejected without
+ * creating a snapshot.
+ */
+static int
+count_snapshots(const char *dataset)
+{
+	zfs_cmd_t zc = {"\0"};
+	int count = 0;
+
+	zc.zc_simple = B_TRUE;
+	(void) strlcpy(zc.zc_name, dataset, sizeof (zc.zc_name));
+	while (lzc_ioctl_fd(zfs_fd, ZFS_IOC_SNAPSHOT_LIST_NEXT, &zc) == 0) {
+		count++;
+		(void) strlcpy(zc.zc_name, dataset, sizeof (zc.zc_name));
+	}
+	return (count);
+}
+
+static void
+tmp_snapshot_run(const char *dataset, int cleanup_fd, const char *variant,
+    const char *prefix, size_t fill, int expected)
+{
+	zfs_cmd_t zc = {"\0"};
+	int before, after, error = 0;
+
+	(void) strlcpy(zc.zc_name, dataset, sizeof (zc.zc_name));
+	if (prefix != NULL)
+		(void) strlcpy(zc.zc_value, prefix, sizeof (zc.zc_value));
+	else
+		(void) memset(zc.zc_value, 'a', fill);
+	zc.zc_cleanup_fd = cleanup_fd;
+
+	before = count_snapshots(dataset);
+	if (lzc_ioctl_fd(zfs_fd, ZFS_IOC_TMP_SNAPSHOT, &zc) != 0)
+		error = errno;
+	after = count_snapshots(dataset);
+
+	if (error != expected) {
+		unexpected_failures = B_TRUE;
+		(void) fprintf(stderr, "%s: Unexpected result with %s, "
+		    "error %d (expecting %d)\n",
+		    active_test, variant, error, expected);
+	}
+	if (expected != 0 && after != before) {
+		unexpected_failures = B_TRUE;
+		(void) fprintf(stderr, "%s: %s created a snapshot "
+		    "(%d before, %d after)\n", active_test, variant,
+		    before, after);
+	}
+	if (expected == 0 && error == 0) {
+		size_t plen = strlen(prefix);
+		char snapname[ZFS_MAX_DATASET_NAME_LEN];
+
+		if (after != before + 1 ||
+		    strncmp(zc.zc_value, prefix, plen) != 0 ||
+		    zc.zc_value[plen] != '-' ||
+		    strlen(zc.zc_value) != plen + 17) {
+			unexpected_failures = B_TRUE;
+			(void) fprintf(stderr, "%s: %s returned '%s' "
+			    "(%d snapshots before, %d after)\n", active_test,
+			    variant, zc.zc_value, before, after);
+		}
+		(void) snprintf(snapname, sizeof (snapname), "%s@%s",
+		    dataset, zc.zc_value);
+		if (!lzc_exists(snapname)) {
+			unexpected_failures = B_TRUE;
+			(void) fprintf(stderr, "%s: %s snapshot '%s' "
+			    "does not exist\n", active_test, variant,
+			    snapname);
+		}
+	}
+}
+
+static void
+test_tmp_snapshot(const char *dataset)
+{
+	char prefix[ZFS_MAX_DATASET_NAME_LEN];
+	size_t maxlen;
+	int cleanup_fd;
+
+	active_test = __func__ + 5;
+	ioc_tested[ZFS_IOC_TMP_SNAPSHOT - ZFS_IOC_FIRST] = B_TRUE;
+
+	cleanup_fd = open(ZFS_DEV, O_RDWR);
+	if (cleanup_fd < 0) {
+		(void) fprintf(stderr, "open: %s\n", strerror(errno));
+		unexpected_failures = B_TRUE;
+		return;
+	}
+
+	/* The prefix "zfs diff" uses, and the longest one that fits. */
+	tmp_snapshot_run(dataset, cleanup_fd, "zfs diff prefix",
+	    "zfs-diff-1234", 0, 0);
+	maxlen = ZFS_MAX_DATASET_NAME_LEN - 1 - strlen(dataset) - 1 - 17;
+	(void) memset(prefix, 'p', maxlen);
+	prefix[maxlen] = '\0';
+	tmp_snapshot_run(dataset, cleanup_fd, "maximum length prefix",
+	    prefix, 0, 0);
+
+	/* Prefixes that are not valid snapshot name components. */
+	tmp_snapshot_run(dataset, cleanup_fd, "empty prefix", "", 0, EINVAL);
+	tmp_snapshot_run(dataset, cleanup_fd, "prefix with '/'",
+	    "bad/prefix", 0, EINVAL);
+	tmp_snapshot_run(dataset, cleanup_fd, "prefix with '@'",
+	    "bad@prefix", 0, EINVAL);
+	tmp_snapshot_run(dataset, cleanup_fd, "prefix with '%'",
+	    "bad%prefix", 0, EINVAL);
+	tmp_snapshot_run(dataset, cleanup_fd, "prefix with '#'",
+	    "bad#prefix", 0, EINVAL);
+
+	/* Prefixes that make the full snapshot name too long. */
+	(void) memset(prefix, 'p', maxlen + 1);
+	prefix[maxlen + 1] = '\0';
+	tmp_snapshot_run(dataset, cleanup_fd, "prefix one byte too long",
+	    prefix, 0, ENAMETOOLONG);
+	tmp_snapshot_run(dataset, cleanup_fd, "unterminated prefix",
+	    NULL, sizeof (((zfs_cmd_t *)NULL)->zc_value), ENAMETOOLONG);
+
+	/* Closing the cleanup fd releases and destroys the snapshots. */
+	(void) close(cleanup_fd);
+}
+
 static void
 test_remap(const char *dataset)
 {
@@ -1041,6 +1170,8 @@ zfs_ioc_input_tests(const char *pool)
 	test_rollback(dataset, snapshot);
 	test_destroy_snaps(pool, snapshot);
 	test_destroy_snaps(pool, snapbase);
+
+	test_tmp_snapshot(dataset);
 
 	test_remap(dataset);
 	test_channel_program(pool);
