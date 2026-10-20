@@ -4440,6 +4440,28 @@ error:
 }
 
 /*
+ * A dry run creates nothing, so when a package of streams is received with
+ * -n into a new filesystem, the filesystems that its earlier streams would
+ * have created (the top-level one and its descendants) don't exist for the
+ * later streams.  Return true if 'name' is one of those: at or below the
+ * top-level filesystem of the package, which did not exist before.
+ */
+static boolean_t
+recv_dryrun_would_create(libzfs_handle_t *hdl, recvflags_t *flags,
+    char **top_zfs, const char *name)
+{
+	size_t len;
+
+	if (!flags->dryrun || top_zfs == NULL || *top_zfs == NULL)
+		return (B_FALSE);
+	len = strlen(*top_zfs);
+	if (strncmp(name, *top_zfs, len) != 0 ||
+	    (name[len] != '\0' && name[len] != '/'))
+		return (B_FALSE);
+	return (!zfs_dataset_exists(hdl, *top_zfs, ZFS_TYPE_DATASET));
+}
+
+/*
  * Restores a backup of tosnap from the file descriptor specified by infd.
  */
 static int
@@ -4695,7 +4717,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		if (cp)
 			*cp = '\0';
 		if (cp &&
-		    !zfs_dataset_exists(hdl, name, ZFS_TYPE_DATASET)) {
+		    !zfs_dataset_exists(hdl, name, ZFS_TYPE_DATASET) &&
+		    !recv_dryrun_would_create(hdl, flags, top_zfs, name)) {
 			char suffix[ZFS_MAX_DATASET_NAME_LEN];
 			(void) strlcpy(suffix, strrchr(destsnap, '/'),
 			    sizeof (suffix));
@@ -4729,7 +4752,8 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		 */
 		if ((flags->isprefix || (*(chopprefix = drrb->drr_toname +
 		    strlen(sendfs)) != '\0' && *chopprefix != '@')) &&
-		    !zfs_dataset_exists(hdl, name, ZFS_TYPE_DATASET)) {
+		    !zfs_dataset_exists(hdl, name, ZFS_TYPE_DATASET) &&
+		    !recv_dryrun_would_create(hdl, flags, top_zfs, name)) {
 			char snap[ZFS_MAX_DATASET_NAME_LEN];
 			(void) strlcpy(snap, strchr(destsnap, '@'),
 			    sizeof (snap));
@@ -4944,6 +4968,12 @@ zfs_receive_one(libzfs_handle_t *hdl, int infd, const char *tosnap,
 		fnvlist_merge(origprops, zhp->zfs_user_props);
 
 		zfs_close(zhp);
+	} else if (recv_dryrun_would_create(hdl, flags, top_zfs, name)) {
+		/*
+		 * An earlier stream in this package would have created it
+		 * (or its parent), had this not been a dry run.
+		 */
+		newfs = stream_wantsnewfs;
 	} else {
 		zfs_handle_t *zhp;
 
