@@ -1879,6 +1879,29 @@ zfs_send_resume_impl_cb_impl(libzfs_handle_t *hdl, sendflags_t *flags,
 		return (zfs_error(hdl, EZFS_BADPATH, errbuf));
 	}
 
+	/*
+	 * The resume token comes from the receiving system, which a raw
+	 * send keeps from the data.  A token that doesn't ask for a raw
+	 * send would send an encrypted dataset decrypted, so require the
+	 * raw or no-preserve-encryption flag for that, as for sends with
+	 * properties.
+	 */
+	if (!flags->saved && !flags->raw &&
+	    !nvlist_exists(resume_nvl, "rawok") &&
+	    zfs_prop_get_int(zhp, ZFS_PROP_ENCRYPTION) != ZIO_CRYPT_OFF) {
+		if (!flags->no_preserve_encryption) {
+			zfs_error_aux(hdl, "encrypted dataset '%s' may not be "
+			    "sent without the raw flag or "
+			    "no-preserve-encryption flag, because the resume "
+			    "token is not for a raw send", zhp->zfs_name);
+			zfs_close(zhp);
+			return (zfs_error(hdl, EZFS_CRYPTOFAILED, errbuf));
+		}
+		(void) fprintf(stderr, "WARNING: no-preserve-encryption flag "
+		    "set, sending dataset %s without encryption\n",
+		    zhp->zfs_name);
+	}
+
 	if (nvlist_lookup_uint64_array(resume_nvl, "book_redact_snaps",
 	    &redact_snap_guids, (uint_t *)&num_redact_snaps) != 0) {
 		num_redact_snaps = -1;

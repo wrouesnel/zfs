@@ -21,7 +21,7 @@
 .\" Copyright 2019 Joyent, Inc.
 .\" Copyright (c) 2024, Klara, Inc.
 .\"
-.Dd February 20, 2026
+.Dd October 20, 2026
 .Dt ZFS-SEND 8
 .Os
 .
@@ -48,7 +48,7 @@
 .Ar snapshot
 .Nm zfs
 .Cm send
-.Op Fl PVenv
+.Op Fl PUVenvw
 .Fl t
 .Ar receive_resume_token
 .Nm zfs
@@ -590,7 +590,7 @@ raw sends and redacted sends cannot be combined at this time.
 .It Xo
 .Nm zfs
 .Cm send
-.Op Fl PVenv
+.Op Fl PUVenvw
 .Fl t
 .Ar receive_resume_token
 .Xc
@@ -602,6 +602,16 @@ received into.
 See the documentation for
 .Nm zfs Cm receive Fl s
 for more details.
+The stream is sent with the flags recorded in the token.
+Since the token comes from the receiving system,
+an encrypted dataset is sent only if the token is for a raw send,
+or if
+.Fl w
+.Pq send raw
+or
+.Fl U
+.Pq send without encryption
+is given.
 .It Xo
 .Nm zfs
 .Cm send
