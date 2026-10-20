@@ -7071,6 +7071,18 @@ zfs_ioc_tmp_snapshot(zfs_cmd_t *zc)
 	char *hold_name;
 	minor_t minor;
 
+	/*
+	 * zc_value is copied in from userland as is, so make sure it is
+	 * terminated.  The prefix must be a valid snapshot name component,
+	 * and "<fs>@<prefix>-<16 hex digits>" must fit in a dataset name.
+	 */
+	zc->zc_value[sizeof (zc->zc_value) - 1] = '\0';
+	if (strlen(zc->zc_name) + 1 + strlen(zc->zc_value) + 17 >=
+	    ZFS_MAX_DATASET_NAME_LEN)
+		return (SET_ERROR(ENAMETOOLONG));
+	if (zfs_component_namecheck(zc->zc_value, NULL, NULL) != 0)
+		return (SET_ERROR(EINVAL));
+
 	zfs_file_t *fp = zfs_onexit_fd_hold(zc->zc_cleanup_fd, &minor);
 	if (fp == NULL)
 		return (SET_ERROR(EBADF));
