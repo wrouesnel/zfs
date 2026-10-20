@@ -5440,11 +5440,14 @@ zio_vdev_io_assess(zio_t *zio)
 		zio->io_error = SET_ERROR(ENXIO);
 
 	/*
-	 * If we can't write to an interior vdev (mirror or RAID-Z),
-	 * set vdev_cant_write so that we stop trying to allocate from it.
+	 * If we can't write to a top-level vdev (a mirror or RAID-Z, or a
+	 * disk on its own), set vdev_cant_write so that we stop trying to
+	 * allocate from it.  Allocating writes that fail are reexecuted,
+	 * and would otherwise be allocated on it again and again.
 	 */
 	if (zio->io_error == ENXIO && zio->io_type == ZIO_TYPE_WRITE &&
-	    vd != NULL && !vd->vdev_ops->vdev_op_leaf) {
+	    vd != NULL && (!vd->vdev_ops->vdev_op_leaf ||
+	    vd == vd->vdev_top)) {
 		vdev_dbgmsg(vd, "zio_vdev_io_assess(zio=%px) setting "
 		    "cant_write=TRUE due to write failure with ENXIO",
 		    zio);

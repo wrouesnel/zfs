@@ -4953,19 +4953,23 @@ vdev_clear(spa_t *spa, vdev_t *vd)
 		vdev_clear(spa, vd->vdev_child[c]);
 
 	/*
-	 * It makes no sense to "clear" an indirect  or removed vdev.
+	 * It makes no sense to "clear" an indirect vdev.
 	 */
-	if (!vdev_is_concrete(vd) || vd->vdev_removed)
+	if (!vdev_is_concrete(vd))
 		return;
 
 	/*
 	 * If we're in the FAULTED state or have experienced failed I/O, then
 	 * clear the persistent state and attempt to reopen the device.  We
 	 * also mark the vdev config dirty, so that the new faulted state is
-	 * written out to disk.
+	 * written out to disk.  A device that was unplugged (REMOVED, or
+	 * about to be) is reopened too: it may be back under another name,
+	 * and while the pool is suspended nothing else can bring it back.
+	 * If it isn't back, it stays REMOVED.
 	 */
 	if (vd->vdev_faulted || vd->vdev_degraded ||
-	    !vdev_readable(vd) || !vdev_writeable(vd)) {
+	    !vdev_readable(vd) || !vdev_writeable(vd) ||
+	    vd->vdev_removed || vd->vdev_remove_wanted) {
 		/*
 		 * When reopening in response to a clear event, it may be due to
 		 * a fmadm repair request.  In this case, if the device is
