@@ -2500,6 +2500,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/xattr/xattr_013_pos.ksh \
 	functional/xattr/xattr_014_pos.ksh \
 	functional/xattr/xattr_compat.ksh \
+	functional/xattr/xattr_spill_shrink.ksh \
 	functional/zoned_uid/cleanup.ksh \
 	functional/zoned_uid/setup.ksh \
 	functional/zoned_uid/zoned_uid_001_pos.ksh \
