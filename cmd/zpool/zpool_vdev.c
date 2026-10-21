@@ -925,10 +925,15 @@ check_replication(nvlist_t *config, nvlist_t *newroot)
 	return (ret);
 }
 
+/*
+ * Zero the first 8K of a device: the pad at the start of label 0, which
+ * ZFS itself never writes, so that libblkid can't find a signature left
+ * there by a previous user of the device (an md 1.2 superblock is at 4K).
+ */
 static int
 zero_label(const char *path)
 {
-	const int size = 4096;
+	const int size = 8192;
 	char buf[size];
 	int err, fd;
 
@@ -1002,7 +1007,7 @@ make_disks(zpool_handle_t *zhp, nvlist_t *nv, boolean_t replacing)
 		/*
 		 * We have a disk device.  If this is a whole disk write
 		 * out the efi partition table, otherwise write zero's to
-		 * the first 4k of the partition.  This is to ensure that
+		 * the first 8k of the partition.  This is to ensure that
 		 * libblkid will not misidentify the partition due to a
 		 * magic value left by the previous filesystem.
 		 */
