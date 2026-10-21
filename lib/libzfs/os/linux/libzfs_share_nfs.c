@@ -303,10 +303,11 @@ get_linux_shareopts_cb(const char *key, const char *value, void *cookie)
 	static const char *const valid_keys[] = { "all_squash", "anongid",
 	    "anonuid", "async", "auth_nlm", "crossmnt", "fsid", "fsuid", "hide",
 	    "insecure", "insecure_locks", "mountpoint", "mp", "no_acl",
-	    "no_all_squash", "no_auth_nlm", "no_root_squash",
-	    "no_subtree_check", "no_wdelay", "nohide", "refer", "replicas",
-	    "root_squash", "secure", "secure_locks", "subtree_check", "sync",
-	    "wdelay" };
+	    "no_all_squash", "no_auth_nlm", "no_pnfs", "no_root_squash",
+	    "no_subtree_check", "no_wdelay", "nohide", "nordirplus", "pnfs",
+	    "reexport", "refer", "replicas", "root_squash", "secure",
+	    "secure_locks", "security_label", "subtree_check", "sync", "wdelay",
+	    "xprtsec" };
 
 	char **plinux_opts = (char **)cookie;
 	char *host, *val_dup, *literal, *next;

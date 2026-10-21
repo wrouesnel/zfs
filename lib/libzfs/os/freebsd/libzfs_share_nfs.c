@@ -63,14 +63,14 @@
  * Recognized keywords:
  *
  *	ro, maproot, mapall, mask, network, sec, alldirs, public, webnfs,
- *	index, quiet
+ *	index, quiet, tls, tlscert, tlscertuser
  */
 static int
 translate_opts(char *oldopts, FILE *out)
 {
 	static const char *const known_opts[] = { "ro", "maproot", "mapall",
 	    "mask", "network", "sec", "alldirs", "public", "webnfs", "index",
-	    "quiet" };
+	    "quiet", "tls", "tlscert", "tlscertuser" };
 	char *newopts, *o, *s = NULL;
 	unsigned int i;
 	size_t len, newopts_len;
