@@ -2511,6 +2511,19 @@ zpool_import_props(libzfs_handle_t *hdl, nvlist_t *config, const char *newname,
 			    "one or more devices are already in use\n");
 			(void) zfs_error(hdl, EZFS_BADDEV, desc);
 			break;
+		case EOVERFLOW: {
+			/*
+			 * vdev_open() fails with EOVERFLOW when a leaf is
+			 * smaller than SPA_MINDEVSIZE.
+			 */
+			char size[64];
+
+			zfs_nicebytes(SPA_MINDEVSIZE, size, sizeof (size));
+			zfs_error_aux(hdl, "one or more devices is smaller "
+			    "than the minimum size (%s)", size);
+			(void) zfs_error(hdl, EZFS_BADDEV, desc);
+			break;
+		}
 		case ENAMETOOLONG:
 			zfs_error_aux(hdl,
 			    "new name of at least one dataset is longer than "
