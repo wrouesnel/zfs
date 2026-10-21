@@ -1324,6 +1324,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_labelclear/zpool_labelclear_exported.ksh \
 	functional/cli_root/zpool_labelclear/zpool_labelclear_removed.ksh \
 	functional/cli_root/zpool_labelclear/zpool_labelclear_valid.ksh \
+	functional/cli_root/zpool_labelclear/zpool_labelclear_wholedisk.ksh \
 	functional/cli_root/zpool_offline/cleanup.ksh \
 	functional/cli_root/zpool_offline/setup.ksh \
 	functional/cli_root/zpool_offline/zpool_offline_001_pos.ksh \
