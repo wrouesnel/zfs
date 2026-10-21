@@ -1438,6 +1438,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_trim/setup.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_attach_detach_add_remove.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_fault_export_import_online.ksh \
+	functional/cli_root/zpool_trim/zpool_trim_follow_links.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_import_export.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_multiple.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_multiple_pools.ksh \
