@@ -269,7 +269,14 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 
 	fobjerr = get_stats_for_obj(di, di->fromsnap, dobj, fobjname,
 	    MAXPATHLEN, &fsb);
-	if (fobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
+	/*
+	 * A file on the delete queue was removed while it was still open:
+	 * it is no longer in that snapshot's namespace, so treat it as
+	 * not existing there.
+	 */
+	if (fobjerr == 0 && di->zerr == ESTALE)
+		fobjerr = -1;
+	else if (fobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
 		zfs_error_aux(di->zhp->zfs_hdl, "%s", zfs_strerror(di->zerr));
 		zfs_error(di->zhp->zfs_hdl, di->zerr, di->errbuf);
 		/*
@@ -282,7 +289,9 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 	tobjerr = get_stats_for_obj(di, di->tosnap, dobj, tobjname,
 	    MAXPATHLEN, &tsb);
 
-	if (tobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
+	if (tobjerr == 0 && di->zerr == ESTALE)
+		tobjerr = -1;
+	else if (tobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
 		if (!already_logged) {
 			zfs_error_aux(di->zhp->zfs_hdl,
 			    "%s", zfs_strerror(di->zerr));
