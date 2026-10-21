@@ -3968,9 +3968,33 @@ zpool_vdev_attach(zpool_handle_t *zhp, const char *old_disk,
 				    "cannot replace a replacing device");
 			}
 		} else if (strcmp(type, VDEV_TYPE_RAIDZ) == 0) {
-			zfs_error_aux(hdl,
-			    "raidz_expansion feature must be enabled "
-			    "in order to attach a device to raidz");
+			/*
+			 * The kernel checks device_rebuild, then
+			 * raidz_expansion, then whether the vdev can be
+			 * rebuilt sequentially; a raidz can't.
+			 */
+			char rebuild_status[64] = {0};
+			char expand_status[64] = {0};
+			zpool_prop_get_feature(zhp,
+			    "feature@device_rebuild", rebuild_status, 63);
+			zpool_prop_get_feature(zhp,
+			    "feature@raidz_expansion", expand_status, 63);
+			if (rebuild && strncmp(rebuild_status,
+			    ZFS_FEATURE_DISABLED, 64) == 0) {
+				zfs_error_aux(hdl,
+				    "device_rebuild feature must be enabled "
+				    "in order to use sequential "
+				    "reconstruction");
+			} else if (rebuild && strncmp(expand_status,
+			    ZFS_FEATURE_DISABLED, 64) != 0) {
+				zfs_error_aux(hdl,
+				    "only mirror and dRAID vdevs support "
+				    "sequential reconstruction");
+			} else {
+				zfs_error_aux(hdl,
+				    "raidz_expansion feature must be enabled "
+				    "in order to attach a device to raidz");
+			}
 		} else {
 			char status[64] = {0};
 			zpool_prop_get_feature(zhp,
