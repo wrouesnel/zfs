@@ -993,6 +993,78 @@ print_spare_list(nvlist_t *nv, int indent)
 	}
 }
 
+/*
+ * The kernel creates the distributed spares of a dRAID vdev when it creates
+ * the vdev (vdev_draid_spare_create()), so they aren't in the vdev tree that
+ * a dry run prints.  Add them to nvroot's spares, after any regular spares
+ * and with the names the kernel will give them, for 'zpool create -n' and
+ * 'zpool add -n'.  next_vdev_id is the id the first top-level vdev in nvroot
+ * will get.
+ */
+static void
+dryrun_add_draid_spares(nvlist_t *nvroot, uint64_t next_vdev_id)
+{
+	nvlist_t **child, **spares, **newspares;
+	uint_t c, children, nspares, n;
+	uint64_t ndspares = 0;
+
+	if (nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_CHILDREN,
+	    &child, &children) != 0)
+		return;
+
+	for (c = 0; c < children; c++) {
+		uint64_t ns = 0;
+
+		if (strcmp(fnvlist_lookup_string(child[c], ZPOOL_CONFIG_TYPE),
+		    VDEV_TYPE_DRAID) == 0)
+			(void) nvlist_lookup_uint64(child[c],
+			    ZPOOL_CONFIG_DRAID_NSPARES, &ns);
+		ndspares += ns;
+	}
+	if (ndspares == 0)
+		return;
+
+	if (nvlist_lookup_nvlist_array(nvroot, ZPOOL_CONFIG_SPARES,
+	    &spares, &nspares) != 0)
+		nspares = 0;
+
+	newspares = safe_malloc((nspares + ndspares) * sizeof (nvlist_t *));
+	for (n = 0; n < nspares; n++)
+		newspares[n] = fnvlist_dup(spares[n]);
+
+	for (c = 0; c < children; c++) {
+		uint64_t ns = 0, nparity = 0;
+
+		if (strcmp(fnvlist_lookup_string(child[c], ZPOOL_CONFIG_TYPE),
+		    VDEV_TYPE_DRAID) != 0)
+			continue;
+		(void) nvlist_lookup_uint64(child[c],
+		    ZPOOL_CONFIG_DRAID_NSPARES, &ns);
+		(void) nvlist_lookup_uint64(child[c], ZPOOL_CONFIG_NPARITY,
+		    &nparity);
+
+		for (uint64_t spare_id = 0; spare_id < ns; spare_id++) {
+			char path[64];
+			nvlist_t *spare = fnvlist_alloc();
+
+			(void) snprintf(path, sizeof (path), "%s%llu-%llu-%llu",
+			    VDEV_TYPE_DRAID, (u_longlong_t)nparity,
+			    (u_longlong_t)(next_vdev_id + c),
+			    (u_longlong_t)spare_id);
+			fnvlist_add_string(spare, ZPOOL_CONFIG_PATH, path);
+			fnvlist_add_string(spare, ZPOOL_CONFIG_TYPE,
+			    VDEV_TYPE_DRAID_SPARE);
+			newspares[n++] = spare;
+		}
+	}
+
+	fnvlist_add_nvlist_array(nvroot, ZPOOL_CONFIG_SPARES,
+	    (const nvlist_t * const *)newspares, n);
+	for (c = 0; c < n; c++)
+		fnvlist_free(newspares[c]);
+	free(newspares);
+}
+
 typedef struct spare_cbdata {
 	uint64_t	cb_guid;
 	zpool_handle_t	*cb_zhp;
@@ -1539,13 +1611,19 @@ zpool_do_add(int argc, char **argv)
 
 	if (dryrun) {
 		nvlist_t *poolnvroot;
-		nvlist_t **l2child, **sparechild;
-		uint_t l2children, sparechildren, c;
+		nvlist_t **l2child, **sparechild, **topchild;
+		uint_t l2children, sparechildren, topchildren, c;
 		char *vname;
 		boolean_t hadcache = B_FALSE, hadspare = B_FALSE;
 
 		verify(nvlist_lookup_nvlist(config, ZPOOL_CONFIG_VDEV_TREE,
 		    &poolnvroot) == 0);
+
+		/* new top-level vdevs get ids after the existing ones */
+		if (nvlist_lookup_nvlist_array(poolnvroot,
+		    ZPOOL_CONFIG_CHILDREN, &topchild, &topchildren) != 0)
+			topchildren = 0;
+		dryrun_add_draid_spares(nvroot, topchildren);
 
 		(void) printf("would update '%s' to the following "
 		    "configuration:\n\n", zpool_get_name(zhp));
@@ -2227,6 +2305,8 @@ zpool_do_create(int argc, char **argv)
 		 */
 		(void) printf("would create '%s' with the "
 		    "following layout:\n\n", poolname);
+
+		dryrun_add_draid_spares(nvroot, 0);
 
 		print_vdev_tree(NULL, poolname, nvroot, 0, "", 0);
 		print_vdev_tree(NULL, "dedup", nvroot, 0,
