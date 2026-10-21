@@ -4242,6 +4242,14 @@ receive_read_payload_and_next_header(dmu_recv_cookie_t *drc, int len, void *buf)
 		return (err);
 	}
 	if (drc->drc_next_rrd->header.drr_type == DRR_BEGIN) {
+		/*
+		 * Another stream starts before this one has ended: the
+		 * sender gave up on this stream (e.g. 'zfs send -R' after a
+		 * read error) and went on with the next one.
+		 */
+		recv_report_stream_error(drc->drc_errors,
+		    "incomplete stream: a BEGIN record was found before "
+		    "the END record (did the send fail?)");
 		kmem_free(drc->drc_next_rrd, sizeof (*drc->drc_next_rrd));
 		drc->drc_next_rrd = NULL;
 		return (SET_ERROR(EINVAL));
