@@ -2749,9 +2749,14 @@ dnode_next_offset(dnode_t *dn, int flags, uint64_t *offset,
 		    flags, lvl, blkid, &index, blkfill, txg, offset);
 
 		if (error == 0 && lvl > minlvl) {
-			/* Continue search at matched block in lvl-1. */
+			/*
+			 * Continue search at matched block in lvl-1, from
+			 * its first entry, or its last one when searching
+			 * backwards.
+			 */
 			blkid = (blkid << epbs) + index;
-			index = 0;
+			index = (flags & DNODE_FIND_BACKWARDS) ?
+			    (1 << epbs) - 1 : 0;
 			--lvl;
 		} else if (error == ESRCH && lvl < maxlvl) {
 			/*
