@@ -1347,6 +1347,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_remove/zpool_remove_001_neg.ksh \
 	functional/cli_root/zpool_remove/zpool_remove_002_pos.ksh \
 	functional/cli_root/zpool_remove/zpool_remove_003_pos.ksh \
+	functional/cli_root/zpool_remove/zpool_remove_replacing.ksh \
 	functional/cli_root/zpool_reopen/cleanup.ksh \
 	functional/cli_root/zpool_reopen/setup.ksh \
 	functional/cli_root/zpool_reopen/zpool_reopen_001_pos.ksh \

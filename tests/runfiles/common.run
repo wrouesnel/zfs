@@ -561,7 +561,7 @@ tags = ['functional', 'cli_root', 'zpool_reguid']
 
 [tests/functional/cli_root/zpool_remove]
 tests = ['zpool_remove_001_neg', 'zpool_remove_002_pos',
-    'zpool_remove_003_pos']
+    'zpool_remove_003_pos', 'zpool_remove_replacing']
 tags = ['functional', 'cli_root', 'zpool_remove']
 
 [tests/functional/cli_root/zpool_replace]
