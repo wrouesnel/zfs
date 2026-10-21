@@ -7074,6 +7074,101 @@ typedef struct share_mount_state {
 	int	sm_status; /* -1 if any of the share/mount operations failed */
 } share_mount_state_t;
 
+typedef struct covered_mount {
+	char		*cm_name;
+	char		*cm_mountp;
+	zfs_handle_t	*cm_zhp;
+} covered_mount_t;
+
+static int
+covered_mount_compare(const void *larg, const void *rarg)
+{
+	const covered_mount_t *l = larg;
+	const covered_mount_t *r = rarg;
+
+	/* Deepest mountpoint first, the order to unmount them. */
+	return (strcmp(r->cm_mountp, l->cm_mountp));
+}
+
+/*
+ * Unmount the descendants of file system 'name' that are mounted below
+ * 'mountpoint', where 'name' is about to be mounted.  It would hide them:
+ * their files would disappear, and they could no longer be unmounted by
+ * their mountpoint, so neither 'zfs unmount' nor 'zpool export' would
+ * work.  This happens when a file system was mounted before its parent,
+ * for example an unencrypted child of an encryption root whose key wasn't
+ * loaded yet.  File systems that can't be unmounted (busy) are left
+ * alone, as are mounts of other file systems.  The ones unmounted are
+ * returned, deepest first, for remount_covered().
+ */
+static covered_mount_t *
+unmount_covered(const char *name, const char *mountpoint, int *countp)
+{
+	FILE *mnttab;
+	struct mnttab entry;
+	covered_mount_t *cm = NULL;
+	size_t len = strlen(mountpoint);
+	size_t nlen = strlen(name);
+	int n = 0, i;
+
+	*countp = 0;
+	/* Mounting at / is the root file system's job; leave it alone. */
+	if (len == 0 || strcmp(mountpoint, "/") == 0 ||
+	    (mnttab = fopen(MNTTAB, "re")) == NULL)
+		return (NULL);
+
+	while (getmntent(mnttab, &entry) == 0) {
+		if (strcmp(entry.mnt_fstype, MNTTYPE_ZFS) != 0 ||
+		    strchr(entry.mnt_special, '@') != NULL ||
+		    strncmp(entry.mnt_special, name, nlen) != 0 ||
+		    entry.mnt_special[nlen] != '/' ||
+		    strncmp(entry.mnt_mountp, mountpoint, len) != 0 ||
+		    entry.mnt_mountp[len] != '/')
+			continue;
+		cm = safe_realloc(cm, (n + 1) * sizeof (covered_mount_t));
+		cm[n].cm_name = safe_strdup(entry.mnt_special);
+		cm[n].cm_mountp = safe_strdup(entry.mnt_mountp);
+		cm[n].cm_zhp = NULL;
+		n++;
+	}
+	(void) fclose(mnttab);
+
+	if (n > 1)
+		qsort(cm, n, sizeof (covered_mount_t), covered_mount_compare);
+
+	for (i = 0; i < n; i++) {
+		zfs_handle_t *zhp = zfs_open(g_zfs, cm[i].cm_name,
+		    ZFS_TYPE_FILESYSTEM);
+		if (zhp == NULL)
+			continue;
+		if (zfs_unmount(zhp, cm[i].cm_mountp, 0) != 0) {
+			zfs_close(zhp);
+			continue;
+		}
+		cm[i].cm_zhp = zhp;
+	}
+
+	*countp = n;
+	return (cm);
+}
+
+/*
+ * Mount again on top what unmount_covered() unmounted, parents first.
+ */
+static void
+remount_covered(covered_mount_t *cm, int count)
+{
+	for (int i = count - 1; i >= 0; i--) {
+		if (cm[i].cm_zhp != NULL) {
+			(void) zfs_mount(cm[i].cm_zhp, NULL, 0);
+			zfs_close(cm[i].cm_zhp);
+		}
+		free(cm[i].cm_name);
+		free(cm[i].cm_mountp);
+	}
+	free(cm);
+}
+
 /*
  * Share or mount a dataset.
  */
@@ -7299,8 +7394,19 @@ share_mount_one(zfs_handle_t *zhp, int op, int flags, enum sa_protocol protocol,
 			return (1);
 		}
 
-		if (zfs_mount(zhp, options, flags) != 0)
+		if (!hasmntopt(&mnt, MNTOPT_REMOUNT)) {
+			covered_mount_t *cm;
+			int ncm, err;
+
+			cm = unmount_covered(zfs_get_name(zhp), mountpoint,
+			    &ncm);
+			err = zfs_mount(zhp, options, flags);
+			remount_covered(cm, ncm);
+			if (err != 0)
+				return (1);
+		} else if (zfs_mount(zhp, options, flags) != 0) {
 			return (1);
+		}
 		break;
 	}
 
