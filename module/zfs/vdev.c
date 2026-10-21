@@ -5803,11 +5803,12 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 		/*
 		 * Since vdev_offline() code path is already in an offline
 		 * state we can miss a statechange event to OFFLINE. Check
-		 * the previous state to catch this condition.
+		 * the previous state to catch this condition: any state
+		 * above OFFLINE (REMOVED and CANT_OPEN too) was a real one.
 		 */
 		if (vd->vdev_ops->vdev_op_leaf &&
 		    (state == VDEV_STATE_OFFLINE) &&
-		    (vd->vdev_prevstate >= VDEV_STATE_FAULTED)) {
+		    (vd->vdev_prevstate > VDEV_STATE_OFFLINE)) {
 			/* post an offline state change */
 			zfs_post_state_change(spa, vd, vd->vdev_prevstate);
 		}
