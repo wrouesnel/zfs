@@ -2406,21 +2406,26 @@ vdev_open(vdev_t *vd, cred_t *cred)
 	}
 
 	/*
-	 * If all children are healthy we update asize if either:
+	 * We update asize if either:
 	 * The asize has increased, due to a device expansion caused by dynamic
-	 * LUN growth or vdev replacement, and automatic expansion is enabled;
-	 * making the additional space available.
+	 * LUN growth or vdev replacement, all children are healthy, and
+	 * automatic expansion is enabled; making the additional space
+	 * available.
 	 *
 	 * The asize has decreased, due to a device shrink usually caused by a
 	 * vdev replace with a smaller device. This ensures that calculations
 	 * based of max_asize and asize e.g. esize are always valid. It's safe
 	 * to do this as we've already validated that asize is greater than
-	 * vdev_min_asize.
+	 * vdev_min_asize.  This applies to a degraded vdev too: a spare or
+	 * replacing vdev starts with the asize of the device it replaced, and
+	 * if that device is faulted, the asize from the remaining (possibly
+	 * smaller) children must be used, or a parent mirror would compute
+	 * an asize larger than its max_asize and fail to open.
 	 */
-	if (vd->vdev_state == VDEV_STATE_HEALTHY &&
-	    ((asize > vd->vdev_asize &&
+	if ((vd->vdev_state == VDEV_STATE_HEALTHY &&
+	    asize > vd->vdev_asize &&
 	    (vd->vdev_expanding || spa->spa_autoexpand)) ||
-	    (asize < vd->vdev_asize)))
+	    asize < vd->vdev_asize)
 		vd->vdev_asize = asize;
 
 	vdev_set_min_asize(vd);
