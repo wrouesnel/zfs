@@ -253,6 +253,7 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 	char fobjname[MAXPATHLEN], tobjname[MAXPATHLEN];
 	boolean_t already_logged = B_FALSE;
 	int fobjerr, tobjerr;
+	int fzerr, tzerr;
 	int change;
 
 	if (dobj == di->shares)
@@ -269,6 +270,7 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 
 	fobjerr = get_stats_for_obj(di, di->fromsnap, dobj, fobjname,
 	    MAXPATHLEN, &fsb);
+	fzerr = di->zerr;
 	if (fobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
 		zfs_error_aux(di->zhp->zfs_hdl, "%s", zfs_strerror(di->zerr));
 		zfs_error(di->zhp->zfs_hdl, di->zerr, di->errbuf);
@@ -281,6 +283,7 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 
 	tobjerr = get_stats_for_obj(di, di->tosnap, dobj, tobjname,
 	    MAXPATHLEN, &tsb);
+	tzerr = di->zerr;
 
 	if (tobjerr && di->zerr != ENOTSUP && di->zerr != ENOENT) {
 		if (!already_logged) {
@@ -289,6 +292,25 @@ write_inuse_diffs_one(FILE *fp, differ_info_t *di, uint64_t dobj)
 			zfs_error(di->zhp->zfs_hdl, di->zerr, di->errbuf);
 		}
 	}
+
+	/*
+	 * Creating a hard link points the file's parent at the link's
+	 * directory, and removing the link leaves it there.  The file's
+	 * path then can't be found from its parent (ENOENT, but the stats
+	 * are valid).  If the same file (same generation) has a path in
+	 * the other snapshot, use that one rather than reporting the file
+	 * as added or removed.
+	 */
+	if (fobjerr && fzerr == ENOENT && !tobjerr && fsb.zs_gen != 0 &&
+	    fsb.zs_gen == tsb.zs_gen) {
+		(void) strlcpy(fobjname, tobjname, sizeof (fobjname));
+		fobjerr = 0;
+	} else if (tobjerr && tzerr == ENOENT && !fobjerr && tsb.zs_gen != 0 &&
+	    tsb.zs_gen == fsb.zs_gen) {
+		(void) strlcpy(tobjname, fobjname, sizeof (tobjname));
+		tobjerr = 0;
+	}
+
 	/*
 	 * Unallocated object sharing the same meta dnode block
 	 */
