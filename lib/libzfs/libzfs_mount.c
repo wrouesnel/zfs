@@ -1317,7 +1317,8 @@ zpool_enable_datasets(zpool_handle_t *zhp, const char *mntopts, int flags,
 	get_all_cb_t cb = { 0 };
 	mount_state_t ms = { 0 };
 	zfs_handle_t *zfsp;
-	int ret = 0;
+	boolean_t noauto;
+	int ret = 0, err;
 
 	if ((zfsp = zfs_open(zhp->zpool_hdl, zhp->zpool_name,
 	    ZFS_TYPE_DATASET)) == NULL)
@@ -1325,11 +1326,17 @@ zpool_enable_datasets(zpool_handle_t *zhp, const char *mntopts, int flags,
 
 	/*
 	 * Gather all non-snapshot datasets within the pool. Start by adding
-	 * the root filesystem for this pool to the list, and then iterate
-	 * over all child filesystems.
+	 * the root filesystem for this pool to the list, unless it has
+	 * canmount=noauto, and then iterate over all child filesystems.
 	 */
-	libzfs_add_handle(&cb, zfsp);
-	if (zfs_iter_filesystems_v2(zfsp, 0, zfs_iter_cb, &cb) != 0)
+	noauto =
+	    zfs_prop_get_int(zfsp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_NOAUTO;
+	if (!noauto)
+		libzfs_add_handle(&cb, zfsp);
+	err = zfs_iter_filesystems_v2(zfsp, 0, zfs_iter_cb, &cb);
+	if (noauto)
+		zfs_close(zfsp);
+	if (err != 0)
 		goto out;
 
 	/*

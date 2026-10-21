@@ -2299,8 +2299,16 @@ zpool_do_create(int argc, char **argv)
 		    nvroot, props, fsprops) == 0) {
 			zfs_handle_t *pool = zfs_open(g_zfs,
 			    tname ? tname : poolname, ZFS_TYPE_FILESYSTEM);
+			/*
+			 * Like any other new file system, the root is not
+			 * mounted when it has canmount=noauto (zfs_mount()
+			 * itself skips canmount=off).
+			 */
 			if (pool != NULL) {
-				if (zfs_mount(pool, NULL, 0) == 0) {
+				if (zfs_prop_get_int(pool, ZFS_PROP_CANMOUNT) ==
+				    ZFS_CANMOUNT_NOAUTO) {
+					ret = 0;
+				} else if (zfs_mount(pool, NULL, 0) == 0) {
 					ret = zfs_share(pool, NULL);
 					zfs_commit_shares(NULL);
 				}
