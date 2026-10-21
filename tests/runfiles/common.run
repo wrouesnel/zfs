@@ -565,7 +565,8 @@ tests = ['zpool_remove_001_neg', 'zpool_remove_002_pos',
 tags = ['functional', 'cli_root', 'zpool_remove']
 
 [tests/functional/cli_root/zpool_replace]
-tests = ['zpool_replace_001_neg', 'replace-o_ashift', 'replace_prop_ashift']
+tests = ['zpool_replace_001_neg', 'replace-o_ashift', 'replace_prop_ashift',
+    'replace_smaller_spare']
 tags = ['functional', 'cli_root', 'zpool_replace']
 
 [tests/functional/cli_root/zpool_resilver]

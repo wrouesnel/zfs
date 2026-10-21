@@ -1359,6 +1359,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_replace/cleanup.ksh \
 	functional/cli_root/zpool_replace/replace-o_ashift.ksh \
 	functional/cli_root/zpool_replace/replace_prop_ashift.ksh \
+	functional/cli_root/zpool_replace/replace_smaller_spare.ksh \
 	functional/cli_root/zpool_replace/setup.ksh \
 	functional/cli_root/zpool_replace/zpool_replace_001_neg.ksh \
 	functional/cli_root/zpool_resilver/cleanup.ksh \
