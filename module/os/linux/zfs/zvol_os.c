@@ -1784,33 +1784,74 @@ out_doi:
 }
 
 /*
+ * Send a change uevent for one block device of a zvol, by writing "change"
+ * to its uevent attribute in sysfs, the way "udevadm trigger
+ * --action=change" does.  kobject_uevent(KOBJ_CHANGE) would do the same,
+ * but it is a GPL-only symbol.
+ */
+static int
+zvol_os_change_uevent_name(const char *name)
+{
+	zfs_file_t *fp;
+	char *path;
+	int error;
+
+	path = kmem_asprintf("/sys/class/block/%s/uevent", name);
+	error = zfs_file_open(path, O_WRONLY, 0, kcred, &fp);
+	if (error == 0) {
+		error = zfs_file_write(fp, "change", strlen("change"), NULL);
+		zfs_file_close(fp);
+	}
+	kmem_strfree(path);
+	return (error);
+}
+
+/*
  * Make udev notice that a zvol was renamed, so that it fixes the /dev/zvol
- * links.  This is what kobject_uevent(KOBJ_CHANGE) would do, but that is a
- * GPL-only symbol.  Instead write "change" to the uevent attribute of the
- * disk in sysfs, the way "udevadm trigger --action=change" does.  The
- * previous workaround, briefly flipping the disk read-only to get a change
- * uevent, made concurrent writes to the zvol fail with EPERM.
+ * links of the zvol and of its partitions (the -partN links).  The previous
+ * workaround, briefly flipping the disk read-only to get a change uevent,
+ * made concurrent writes to the zvol fail with EPERM, and only covered the
+ * disk itself.
  *
  * This is best effort, the rename itself has already happened.
  */
 static void
 zvol_os_change_uevent(struct gendisk *disk)
 {
-	zfs_file_t *fp;
-	char *path;
+	unsigned long partno;
+	char *name;
 	int error;
+#ifdef HAVE_GENDISK_PART_TBL_XARRAY
+	struct block_device *part;
+#endif
 
-	path = kmem_asprintf("/sys/class/block/%s/uevent", disk->disk_name);
-	error = zfs_file_open(path, O_WRONLY, 0, kcred, &fp);
-	if (error == 0) {
-		error = zfs_file_write(fp, "change", strlen("change"), NULL);
-		zfs_file_close(fp);
-	}
+	error = zvol_os_change_uevent_name(disk->disk_name);
 	if (error != 0) {
 		zfs_dbgmsg("zvol: change uevent for %s failed: %d",
 		    disk->disk_name, error);
 	}
-	kmem_strfree(path);
+
+	/*
+	 * The partitions of zdN are zdNpM.  Since 5.11 they are kept in
+	 * disk->part_tbl, indexed by partition number, where index 0 is the
+	 * disk itself.  Before that, without GENHD_FL_EXT_DEVT (which zvols
+	 * don't set), a disk only has partitions below disk->minors.
+	 */
+#ifdef HAVE_GENDISK_PART_TBL_XARRAY
+	xa_for_each(&disk->part_tbl, partno, part) {
+		if (partno == 0)
+			continue;
+#else
+	for (partno = 1; partno < disk->minors; partno++) {
+#endif
+		name = kmem_asprintf("%sp%lu", disk->disk_name, partno);
+		error = zvol_os_change_uevent_name(name);
+		if (error != 0 && error != ENOENT) {
+			zfs_dbgmsg("zvol: change uevent for %s failed: %d",
+			    name, error);
+		}
+		kmem_strfree(name);
+	}
 }
 
 int
