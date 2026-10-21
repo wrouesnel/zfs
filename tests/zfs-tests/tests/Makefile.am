@@ -1445,6 +1445,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zpool_trim/zpool_trim_offline_export_import_online.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_online_offline.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_partial.ksh \
+	functional/cli_root/zpool_trim/zpool_trim_pool_unsupported.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_rate.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_rate_neg.ksh \
 	functional/cli_root/zpool_trim/zpool_trim_secure.ksh \
