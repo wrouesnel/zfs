@@ -522,6 +522,19 @@ changelist_add_mounted(zfs_handle_t *zhp, void *data)
 	return (0);
 }
 
+/*
+ * CL_GATHER_MOUNT_ALWAYS makes changelist_postfix() mount file systems that
+ * aren't mounted now (zfs receive uses it for the file systems it creates),
+ * but only those that 'zfs mount -a' would mount: canmount=noauto ones are
+ * left alone.
+ */
+static boolean_t
+changelist_mount_always(prop_changelist_t *clp, zfs_handle_t *zhp)
+{
+	return ((clp->cl_gflags & CL_GATHER_MOUNT_ALWAYS) &&
+	    zfs_prop_get_int(zhp, ZFS_PROP_CANMOUNT) == ZFS_CANMOUNT_ON);
+}
+
 static int
 change_one(zfs_handle_t *zhp, void *data)
 {
@@ -570,7 +583,7 @@ change_one(zfs_handle_t *zhp, void *data)
 	    share_sourcetype == ZPROP_SRC_INHERITED))) {
 		cn = zfs_alloc(zfs_get_handle(zhp), sizeof (prop_changenode_t));
 		cn->cn_handle = zhp;
-		cn->cn_mounted = (clp->cl_gflags & CL_GATHER_MOUNT_ALWAYS) ||
+		cn->cn_mounted = changelist_mount_always(clp, zhp) ||
 		    zfs_is_mounted(zhp, NULL);
 		cn->cn_shared = zfs_is_shared(zhp, NULL, NULL);
 		cn->cn_zoned = zfs_prop_get_int(zhp, ZFS_PROP_ZONED);
@@ -774,7 +787,7 @@ changelist_gather(zfs_handle_t *zhp, zfs_prop_t prop, int gather_flags,
 	 */
 	cn = zfs_alloc(zhp->zfs_hdl, sizeof (prop_changenode_t));
 	cn->cn_handle = temp;
-	cn->cn_mounted = (clp->cl_gflags & CL_GATHER_MOUNT_ALWAYS) ||
+	cn->cn_mounted = changelist_mount_always(clp, temp) ||
 	    zfs_is_mounted(temp, NULL);
 	cn->cn_shared = zfs_is_shared(temp, NULL, NULL);
 	cn->cn_zoned = zfs_prop_get_int(zhp, ZFS_PROP_ZONED);

@@ -148,7 +148,7 @@ extern int zprop_expand_list(libzfs_handle_t *hdl, zprop_list_t **plp,
 /*
  * Use this changelist_gather() flag to force attempting mounts
  * on each change node regardless of whether or not it is currently
- * mounted.
+ * mounted, if its canmount property is "on".
  */
 #define	CL_GATHER_MOUNT_ALWAYS	1
 /*
