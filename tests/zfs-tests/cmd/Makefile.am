@@ -155,6 +155,10 @@ scripts_zfs_tests_bin_PROGRAMS  += %D%/read_dos_attributes %D%/write_dos_attribu
 %C%_write_dos_attributes_SOURCES = %D%/linux_dos_attributes/write_dos_attributes.c
 endif
 
+if BUILD_FREEBSD
+scripts_zfs_tests_bin_PROGRAMS += %D%/extattr_capmode
+endif
+
 scripts_zfs_tests_bin_PROGRAMS += %D%/file_fadvise
 %C%_file_fadvise_SOURCES  = %D%/file/file_fadvise.c
 

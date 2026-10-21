@@ -9,6 +9,7 @@
 /devname2devid
 /dir_rd_update
 /draid
+/extattr_capmode
 /file_fadvise
 /file_append
 /file_check
