@@ -2491,7 +2491,23 @@ zfs_send_cb_impl(zfs_handle_t *zhp, const char *fromsnap, const char *tosnap,
 			goto err_out;
 
 		if (sdd.snapholds != NULL) {
-			err = zfs_hold_nvl(zhp, sdd.cleanup_fd, sdd.snapholds);
+			nvlist_t *errors = NULL;
+
+			/*
+			 * The holds only keep the snapshots from being
+			 * destroyed while they are sent.  A user who may send
+			 * them but not hold them ('zfs allow' without "hold")
+			 * gets EPERM for the whole request; send without the
+			 * holds then, as 'zfs send -i' does.  For any other
+			 * error, zfs_hold_nvl() tries again and reports it.
+			 */
+			err = lzc_hold(sdd.snapholds, sdd.cleanup_fd, &errors);
+			if (err == EPERM && nvlist_empty(errors))
+				err = 0;
+			else if (err != 0)
+				err = zfs_hold_nvl(zhp, sdd.cleanup_fd,
+				    sdd.snapholds);
+			fnvlist_free(errors);
 			if (err != 0)
 				goto stderr_out;
 
