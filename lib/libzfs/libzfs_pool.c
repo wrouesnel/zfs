@@ -4419,6 +4419,39 @@ out:
 }
 
 /*
+ * Does a top-level mirror have a child that is being replaced or a hot spare
+ * in use?  Device removal waits for those to be done.
+ */
+static boolean_t
+mirror_replacing(zpool_handle_t *zhp)
+{
+	nvlist_t *nvroot, **top, **child;
+	uint_t ntop, nchild;
+	const char *type;
+
+	if (nvlist_lookup_nvlist(zhp->zpool_config, ZPOOL_CONFIG_VDEV_TREE,
+	    &nvroot) != 0 || nvlist_lookup_nvlist_array(nvroot,
+	    ZPOOL_CONFIG_CHILDREN, &top, &ntop) != 0)
+		return (B_FALSE);
+
+	for (uint_t t = 0; t < ntop; t++) {
+		if (nvlist_lookup_string(top[t], ZPOOL_CONFIG_TYPE,
+		    &type) != 0 || strcmp(type, VDEV_TYPE_MIRROR) != 0 ||
+		    nvlist_lookup_nvlist_array(top[t], ZPOOL_CONFIG_CHILDREN,
+		    &child, &nchild) != 0)
+			continue;
+		for (uint_t c = 0; c < nchild; c++) {
+			if (nvlist_lookup_string(child[c], ZPOOL_CONFIG_TYPE,
+			    &type) == 0 &&
+			    (strcmp(type, VDEV_TYPE_REPLACING) == 0 ||
+			    strcmp(type, VDEV_TYPE_SPARE) == 0))
+				return (B_TRUE);
+		}
+	}
+	return (B_FALSE);
+}
+
+/*
  * Remove the given device.
  */
 int
@@ -4476,6 +4509,11 @@ zpool_vdev_remove(zpool_handle_t *zhp, const char *path)
 		if (islog) {
 			zfs_error_aux(hdl,
 			    "Mount encrypted datasets to replay logs.");
+		} else if (mirror_replacing(zhp)) {
+			zfs_error_aux(hdl,
+			    "a device is being replaced or a hot spare is in "
+			    "use; wait for the replacement to finish or "
+			    "detach the spare");
 		} else {
 			zfs_error_aux(hdl,
 			    "Pool busy; removal may already be in progress, "

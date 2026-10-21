@@ -2342,6 +2342,7 @@ spa_vdev_remove_top_check(vdev_t *vd)
 	 * and not be raidz or draid.
 	 */
 	vdev_t *rvd = spa->spa_root_vdev;
+	boolean_t replacing = B_FALSE;
 	for (uint64_t id = 0; id < rvd->vdev_children; id++) {
 		vdev_t *cvd = rvd->vdev_child[id];
 
@@ -2362,17 +2363,29 @@ spa_vdev_remove_top_check(vdev_t *vd)
 		if (vdev_get_nparity(cvd) != 0)
 			return (SET_ERROR(EINVAL));
 		/*
-		 * Need the mirror to be mirror of leaf vdevs only
+		 * Need the mirror to be mirror of leaf vdevs only.  A child
+		 * being replaced or a hot spare in use is only temporary:
+		 * report that as busy, once the rest of the configuration
+		 * has been checked.
 		 */
 		if (cvd->vdev_ops == &vdev_mirror_ops) {
 			for (uint64_t cid = 0;
 			    cid < cvd->vdev_children; cid++) {
-				if (!cvd->vdev_child[cid]->vdev_ops->
-				    vdev_op_leaf)
+				vdev_t *ccvd = cvd->vdev_child[cid];
+
+				if (ccvd->vdev_ops->vdev_op_leaf)
+					continue;
+				if (ccvd->vdev_ops == &vdev_replacing_ops ||
+				    ccvd->vdev_ops == &vdev_spare_ops)
+					replacing = B_TRUE;
+				else
 					return (SET_ERROR(EINVAL));
 			}
 		}
 	}
+
+	if (replacing)
+		return (SET_ERROR(EBUSY));
 
 	return (0);
 }
