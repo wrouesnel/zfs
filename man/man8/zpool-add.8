@@ -17,7 +17,7 @@
 .\" Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
 .\" Copyright (c) 2024 by Delphix. All Rights Reserved.
 .\"
-.Dd March 8, 2024
+.Dd October 21, 2026
 .Dt ZPOOL-ADD 8
 .Os
 .
@@ -92,6 +92,8 @@ Adding top-level
 .Ar vdev Ns s
 with different sector sizes will prohibit future device removal operations, see
 .Xr zpool-remove 8 .
+Log devices are not validated, as their sector size does not affect device
+removal.
 .It Fl -allow-in-use
 Allow vdevs to be added even if they might be in use in another pool.
 .It Fl -allow-replication-mismatch

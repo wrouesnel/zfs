@@ -8312,6 +8312,14 @@ spa_vdev_add(spa_t *spa, nvlist_t *nvroot, boolean_t check_ashift)
 	if (check_ashift && spa->spa_max_ashift == spa->spa_min_ashift) {
 		for (int c = 0; c < vd->vdev_children; c++) {
 			tvd = vd->vdev_child[c];
+			/*
+			 * The check keeps device removal possible.  A log's
+			 * ashift doesn't affect that: it isn't part of
+			 * spa_min_ashift/spa_max_ashift, and a log is removed
+			 * without remapping (spa_vdev_remove_log()).
+			 */
+			if (tvd->vdev_islog)
+				continue;
 			if (tvd->vdev_ashift != spa->spa_max_ashift) {
 				return (spa_vdev_exit(spa, vd, txg,
 				    ZFS_ERR_ASHIFT_MISMATCH));
