@@ -2789,6 +2789,20 @@ zpool_collect_leaves(zpool_handle_t *zhp, nvlist_t *nvroot, nvlist_t *res)
 	    &child, &children);
 
 	if (children == 0) {
+		const char *cpath;
+
+		/*
+		 * The names are looked up again with zpool_find_vdev(), so
+		 * use the configured path as is.  zpool_vdev_name() applies
+		 * the ZPOOL_VDEV_NAME_* environment variables, and a path
+		 * resolved for ZPOOL_VDEV_NAME_FOLLOW_LINKS doesn't match.
+		 */
+		if (nvlist_lookup_string(nvroot, ZPOOL_CONFIG_PATH,
+		    &cpath) == 0) {
+			fnvlist_add_boolean(res, cpath);
+			return;
+		}
+
 		char *path = zpool_vdev_name(hdl, zhp, nvroot,
 		    VDEV_NAME_PATH);
 
