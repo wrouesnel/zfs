@@ -1795,6 +1795,7 @@ zpool_do_labelclear(int argc, char **argv)
 	pool_state_t state;
 	boolean_t inuse = B_FALSE;
 	boolean_t force = B_FALSE;
+	boolean_t found = B_FALSE;
 
 	/* check options */
 	while ((c = getopt(argc, argv, "f")) != -1) {
@@ -1873,6 +1874,32 @@ zpool_do_labelclear(int argc, char **argv)
 		ret = 1;
 		goto errout;
 	}
+
+	/*
+	 * ZFS keeps the labels of a whole disk that it partitioned on the
+	 * first partition.  If the given path has no label and is such a
+	 * disk, clear the labels of that partition.
+	 */
+	if (config == NULL && zfs_dev_is_whole_disk(vdev)) {
+		char part[MAXPATHLEN];
+		int pfd;
+
+		(void) strlcpy(part, vdev, sizeof (part));
+		if (zfs_append_partition(part, sizeof (part)) != -1 &&
+		    strcmp(part, vdev) != 0 &&
+		    (pfd = open(part, O_RDWR)) >= 0) {
+			(void) zfs_dev_flush(pfd);
+			if (zpool_read_label(pfd, &config, NULL) == 0 &&
+			    config != NULL) {
+				(void) close(fd);
+				fd = pfd;
+				(void) strlcpy(vdev, part, sizeof (vdev));
+			} else {
+				(void) close(pfd);
+			}
+		}
+	}
+	found = (config != NULL);
 	nvlist_free(config);
 
 	ret = zpool_in_use(g_zfs, fd, &state, &name, &inuse);
@@ -1941,7 +1968,8 @@ wipe_label:
 	ret = zpool_clear_label(fd);
 	if (ret != 0) {
 		(void) fprintf(stderr,
-		    "failed to clear label for %s\n", vdev);
+		    "failed to clear label for %s%s\n", vdev,
+		    found ? "" : ": no ZFS label found");
 	}
 
 errout:
