@@ -26,7 +26,8 @@ typeset VDEV_PREFIX="$TEST_BASE_DIR/filedev"
 #
 # STRATEGY:
 # 1. Create different storage pools, use -n to add devices to the pool and
-#    verify the output is as expected.
+#    verify the output is as expected.  dRAID vdevs list the distributed
+#    spares they will create.
 # 2. Create a pool with a hole vdev and verify it's not listed with add -n.
 #
 
@@ -118,6 +119,28 @@ typeset -a tests=(
 	  ${dev[8]}
 	  ${dev[9]}"
     )
+    (
+	tree="draid1:2d:4c:1s '${dev[0]}' '${dev[1]}' '${dev[2]}' '${dev[3]}'"
+
+	add="draid1:2d:4c:1s '${dev[4]}' '${dev[5]}' '${dev[6]}' '${dev[7]}'"
+
+	want="$STR_DRYRUN
+
+	$TESTPOOL
+	  draid1:2d:4c:1s-0
+	    ${dev[0]}
+	    ${dev[1]}
+	    ${dev[2]}
+	    ${dev[3]}
+	  draid1:2d:4c:1s
+	    ${dev[4]}
+	    ${dev[5]}
+	    ${dev[6]}
+	    ${dev[7]}
+	spares
+	  draid1-0-0
+	  draid1-1-0"
+    )
 )
 
 verify_runnable "global"
@@ -134,7 +157,7 @@ log_onexit cleanup
 
 # Create needed file vdevs.
 for (( i=0; i < ${#dev[@]}; i+=1 )); do
-	log_must truncate -s $SPA_MINDEVSIZE "${dev[$i]}"
+	log_must truncate -s $MINVDEVSIZE "${dev[$i]}"
 done
 
 # Foreach test create pool, add -n devices and check output.
