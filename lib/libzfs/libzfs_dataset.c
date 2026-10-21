@@ -1170,6 +1170,33 @@ badlabel:
 				(void) zfs_error(hdl, EZFS_BADPROP, errbuf);
 				goto error;
 			}
+
+			/*
+			 * Store the mountpoint without repeated or trailing
+			 * slashes.  The mount itself ignores them, but the
+			 * mount order (mountpoint_cmp() and
+			 * libzfs_path_contains()) compares the strings, so a
+			 * child mounted under "/a//b" or "/a/b/" could be
+			 * mounted before its parent and end up hidden under
+			 * it.
+			 */
+			char *mp = zfs_strdup(hdl, strval);
+			char *d = mp;
+			for (const char *c = strval; *c != '\0'; c++) {
+				if (*c == '/' && d > mp && d[-1] == '/')
+					continue;
+				*d++ = *c;
+			}
+			if (d > mp + 1 && d[-1] == '/')
+				d--;
+			*d = '\0';
+			if (strcmp(mp, strval) != 0 &&
+			    nvlist_add_string(ret, propname, mp) != 0) {
+				free(mp);
+				(void) no_memory(hdl);
+				goto error;
+			}
+			free(mp);
 			zfs_fallthrough;
 		}
 
