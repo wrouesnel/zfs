@@ -25,7 +25,10 @@
 # STRATEGY:
 #	1. Create 2 separate zpools, zpool name lengths must be the same.
 #	2. Attempt to simultaneously create a snapshot of each pool.
-#	3. Verify the snapshot creation failed.
+#	3. Verify the snapshot creation failed, created neither snapshot and
+#	   said why: the snapshots are in different pools.
+#	4. Verify two snapshots of one filesystem still fail with the
+#	   "multiple snapshots of same fs" message.
 #
 
 verify_runnable "both"
@@ -38,6 +41,7 @@ function cleanup
 		fi
 	done
 
+	rm -f $TEST_BASE_DIR/out.$$
 	for dev in $SNAPDEV1 $SNAPDEV2 ; do
 		if [[ -f $dev ]] ; then
 			log_must rm -f $dev
@@ -54,6 +58,20 @@ log_must mkfile $MINVDEVSIZE $SNAPDEV2
 log_must zpool create $SNAPPOOL1 $SNAPDEV1
 log_must zpool create $SNAPPOOL2 $SNAPDEV2
 
-log_mustnot zfs snapshot $SNAPPOOL1@snap1 $SNAPPOOL2@snap2
+log_mustnot eval "zfs snapshot $SNAPPOOL1@snap1 $SNAPPOOL2@snap2 \
+    >$TEST_BASE_DIR/out.$$ 2>&1"
+log_note "$(<$TEST_BASE_DIR/out.$$)"
+log_must grep -q "must all be in the same pool" $TEST_BASE_DIR/out.$$
+log_mustnot grep -q "same fs" $TEST_BASE_DIR/out.$$
+log_mustnot snapexists $SNAPPOOL1@snap1
+log_mustnot snapexists $SNAPPOOL2@snap2
+
+log_mustnot eval "zfs snapshot $SNAPPOOL1@snap1 $SNAPPOOL1@snap2 \
+    >$TEST_BASE_DIR/out.$$ 2>&1"
+log_note "$(<$TEST_BASE_DIR/out.$$)"
+log_must grep -q "multiple snapshots of same fs not allowed" \
+    $TEST_BASE_DIR/out.$$
+log_mustnot snapexists $SNAPPOOL1@snap1
+log_mustnot snapexists $SNAPPOOL1@snap2
 
 log_pass "'zfs snapshot pool1@snap1 pool2@snap2' should fail since snapshots are in different pools."
