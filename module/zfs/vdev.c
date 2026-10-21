@@ -1482,9 +1482,12 @@ vdev_remove_parent(vdev_t *cvd)
 	ASSERT(mvd->vdev_ops == &vdev_mirror_ops ||
 	    mvd->vdev_ops == &vdev_replacing_ops ||
 	    mvd->vdev_ops == &vdev_spare_ops);
+	/*
+	 * cvd keeps its own logical and physical ashift: mvd's came from
+	 * the device it replaced (vdev_add_parent()) or are the largest of
+	 * its children's, and vdev_open() never lowers them.
+	 */
 	cvd->vdev_ashift = mvd->vdev_ashift;
-	cvd->vdev_logical_ashift = mvd->vdev_logical_ashift;
-	cvd->vdev_physical_ashift = mvd->vdev_physical_ashift;
 	vdev_remove_child(mvd, cvd);
 	vdev_remove_child(pvd, mvd);
 
