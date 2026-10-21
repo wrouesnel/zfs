@@ -4124,9 +4124,11 @@ zfs_snapshot_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, nvlist_t *props)
 	(void) snprintf(errbuf, sizeof (errbuf),
 	    "cannot create snapshots ");
 
+	pool[0] = '\0';
 	elem = NULL;
 	while ((elem = nvlist_next_nvpair(snaps, elem)) != NULL) {
 		const char *snapname = nvpair_name(elem);
+		size_t poollen = strcspn(snapname, "/@");
 
 		/* validate the target name */
 		if (!zfs_validate_name(hdl, snapname, ZFS_TYPE_SNAPSHOT,
@@ -4135,17 +4137,29 @@ zfs_snapshot_nvl(libzfs_handle_t *hdl, nvlist_t *snaps, nvlist_t *props)
 			    "cannot create snapshot '%s'", snapname);
 			return (zfs_error(hdl, EZFS_INVALIDNAME, errbuf));
 		}
+
+		/*
+		 * lzc_snapshot() (below) creates all the snapshots in one
+		 * pool.  The kernel returns EXDEV for a snapshot outside it,
+		 * the same error as for two snapshots of one filesystem, so
+		 * catch this case here to say what is wrong.
+		 */
+		if (pool[0] == '\0') {
+			(void) strlcpy(pool, snapname,
+			    MIN(poollen + 1, sizeof (pool)));
+		} else if (strlen(pool) != poollen ||
+		    strncmp(pool, snapname, poollen) != 0) {
+			zfs_error_aux(hdl,
+			    "snapshots must all be in the same pool");
+			return (zfs_error(hdl, EZFS_CROSSTARGET, errbuf));
+		}
 	}
 
 	/*
-	 * get pool handle for prop validation. assumes all snaps are in the
-	 * same pool, as does lzc_snapshot (below).
+	 * get pool handle for prop validation.
 	 */
-	elem = nvlist_next_nvpair(snaps, NULL);
-	if (elem == NULL)
+	if (pool[0] == '\0')
 		return (-1);
-	(void) strlcpy(pool, nvpair_name(elem), sizeof (pool));
-	pool[strcspn(pool, "/@")] = '\0';
 	zpool_hdl = zpool_open(hdl, pool);
 	if (zpool_hdl == NULL)
 		return (-1);
