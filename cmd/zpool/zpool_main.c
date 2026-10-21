@@ -8885,6 +8885,7 @@ zpool_do_trim(int argc, char **argv)
 		if (zhp == NULL)
 			return (-1);
 		/* no individual leaf vdevs specified, so add them all */
+		cbdata.trim_flags.fullpool = B_TRUE;
 		error = zpool_trim_one(zhp, &cbdata);
 		zpool_close(zhp);
 	} else {
