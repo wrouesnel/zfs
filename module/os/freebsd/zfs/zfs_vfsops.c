@@ -2200,6 +2200,7 @@ zfs_init(void)
 	 * Initialize znode cache, vnode ops, etc...
 	 */
 	zfs_znode_init();
+	zfs_dirent_name_init();
 
 	/*
 	 * Reduce number of vnodes. Originally number of vnodes is calculated
@@ -2226,6 +2227,7 @@ zfs_fini(void)
 
 	taskq_destroy(zfsvfs_taskq);
 	zfsctl_fini();
+	zfs_dirent_name_fini();
 	zfs_znode_fini();
 	zfs_vnodes_adjust_back();
 }
