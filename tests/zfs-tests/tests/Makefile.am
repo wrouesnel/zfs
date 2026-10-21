@@ -883,6 +883,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/cli_root/zfs_mount/zfs_mount_all_001_pos.ksh \
 	functional/cli_root/zfs_mount/zfs_mount_all_fail.ksh \
 	functional/cli_root/zfs_mount/zfs_mount_all_mountpoints.ksh \
+	functional/cli_root/zfs_mount/zfs_mount_covered.ksh \
 	functional/cli_root/zfs_mount/zfs_mount_encrypted.ksh \
 	functional/cli_root/zfs_mount/zfs_mount_recursive.ksh \
 	functional/cli_root/zfs_mount/zfs_mount_remount.ksh \
