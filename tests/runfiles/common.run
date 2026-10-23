@@ -1130,7 +1130,7 @@ tags = ['functional', 'test_runner']
 
 [tests/functional/trim]
 tests = ['autotrim_integrity', 'autotrim_config', 'autotrim_trim_integrity',
-    'trim_integrity', 'trim_config', 'trim_l2arc']
+    'trim_align', 'trim_integrity', 'trim_config', 'trim_l2arc']
 tags = ['functional', 'trim']
 
 [tests/functional/truncate]
