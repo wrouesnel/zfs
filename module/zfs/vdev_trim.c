@@ -96,6 +96,14 @@ static unsigned int zfs_trim_extent_bytes_max = 128 * 1024 * 1024;
 static unsigned int zfs_trim_extent_bytes_min = 32 * 1024;
 
 /*
+ * When non-zero, round each TRIM in to a multiple of 2^zfs_trim_align_shift
+ * bytes in the leaf vdev's offset space, skipping ranges that become empty.
+ * A workaround for drives that report 512-byte sectors on ashift=9 vdevs
+ * but mishandle a TRIM that covers part of a larger internal page.
+ */
+static unsigned int zfs_trim_align_shift = 0;
+
+/*
  * Skip uninitialized metaslabs during the TRIM process.  This option is
  * useful for pools constructed from large thinly-provisioned devices where
  * TRIM operations are slow.  As a pool ages an increasing fraction of
@@ -586,6 +594,7 @@ vdev_trim_ranges(trim_args_t *ta)
 	zfs_btree_index_t idx;
 	uint64_t extent_bytes_max = ta->trim_extent_bytes_max;
 	uint64_t extent_bytes_min = ta->trim_extent_bytes_min;
+	uint64_t align = 1ULL << MIN(zfs_trim_align_shift, 63);
 	spa_t *spa = vd->vdev_spa;
 	int error = 0;
 
@@ -596,20 +605,25 @@ vdev_trim_ranges(trim_args_t *ta)
 	    rs = zfs_btree_next(t, &idx, &idx)) {
 		uint64_t size = zfs_rs_get_end(rs, ta->trim_tree) -
 		    zfs_rs_get_start(rs, ta->trim_tree);
+		uint64_t start = P2ROUNDUP(VDEV_LABEL_START_SIZE +
+		    zfs_rs_get_start(rs, ta->trim_tree), align);
+		uint64_t end = P2ALIGN_TYPED(VDEV_LABEL_START_SIZE +
+		    zfs_rs_get_end(rs, ta->trim_tree), align, uint64_t);
 
-		if (extent_bytes_min && size < extent_bytes_min) {
+		if (end <= start ||
+		    (extent_bytes_min && end - start < extent_bytes_min)) {
 			spa_iostats_trim_add(spa, ta->trim_type,
 			    0, 0, 1, size, 0, 0);
 			continue;
 		}
+		size = end - start;
 
 		/* Split range into legally-sized physical chunks */
 		uint64_t writes_required = ((size - 1) / extent_bytes_max) + 1;
 
 		for (uint64_t w = 0; w < writes_required; w++) {
-			error = vdev_trim_range(ta, VDEV_LABEL_START_SIZE +
-			    zfs_rs_get_start(rs, ta->trim_tree) +
-			    (w *extent_bytes_max), MIN(size -
+			error = vdev_trim_range(ta, start +
+			    (w * extent_bytes_max), MIN(size -
 			    (w * extent_bytes_max), extent_bytes_max));
 			if (error != 0) {
 				goto done;
@@ -1788,6 +1802,9 @@ EXPORT_SYMBOL(vdev_autotrim_stop_wait);
 EXPORT_SYMBOL(vdev_autotrim_restart);
 EXPORT_SYMBOL(vdev_trim_l2arc);
 EXPORT_SYMBOL(vdev_trim_simple);
+
+ZFS_MODULE_PARAM(zfs_trim, zfs_trim_, align_shift, UINT, ZMOD_RW,
+	"Round TRIM ranges in to this power-of-two alignment (0 = off)");
 
 ZFS_MODULE_PARAM(zfs_trim, zfs_trim_, extent_bytes_max, UINT, ZMOD_RW,
 	"Max size of TRIM commands, larger will be split");

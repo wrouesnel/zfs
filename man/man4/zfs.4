@@ -2584,6 +2584,24 @@ Maximum size of TRIM command.
 Larger ranges will be split into chunks no larger than this value before
 issuing.
 .
+.It Sy zfs_trim_align_shift Ns = Ns Sy 0 Pq uint
+When non-zero, round the start of each TRIM up and its end down to a multiple
+of
+.Sy 2^zfs_trim_align_shift
+bytes, and skip ranges that become empty, so only whole aligned blocks are
+trimmed.
+Offsets are those of the leaf vdev, so a partition must be aligned too.
+This is a workaround for drives that report 512-byte sectors but mishandle
+a TRIM covering part of a larger internal page, when used with
+.Sy ashift Ns = Ns Sy 9 :
+.Sy 12
+trims only whole 4 KiB pages.
+It has no effect on vdevs whose
+.Sy ashift
+is at least this value; creating such pools with
+.Sy ashift Ns = Ns Sy 12
+is the better fix.
+.
 .It Sy zfs_trim_extent_bytes_min Ns = Ns Sy 32768 Ns B Po 32 KiB Pc Pq uint
 Minimum size of TRIM commands.
 TRIM ranges smaller than this will be skipped,
