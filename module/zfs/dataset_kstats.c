@@ -51,7 +51,8 @@ static dataset_kstat_values_t empty_dataset_kstats = {
 	{ "zil_itx_metaslab_slog_write",	KSTAT_DATA_UINT64 },
 	{ "zil_itx_metaslab_slog_alloc",	KSTAT_DATA_UINT64 },
 	{ "zil_replay_split_merged",		KSTAT_DATA_UINT64 },
-	{ "zil_replay_split_dropped",		KSTAT_DATA_UINT64 }
+	{ "zil_replay_split_dropped",		KSTAT_DATA_UINT64 },
+	{ "zil_replay_write_failed",		KSTAT_DATA_UINT64 }
 	}
 };
 

@@ -353,6 +353,32 @@ typedef struct {
 } lr_write_t;
 
 /*
+ * The lr_blkptr of a WR_INDIRECT TX_WRITE is filled in by its dmu_sync()
+ * write, before the log block is written.  If that write fails before its
+ * block pointer is complete (it, or its gang members, failed to allocate),
+ * the log block is still written, with this blkptr in the record instead.
+ * It is a hole with the block size, so software that doesn't know it
+ * replays zeros, as it would for the hole that a failed allocation leaves.
+ * But no genuine hole has a non-zero checksum word: holes are zeroed
+ * blkptrs (BP_ZERO() in zio_write_compress(), dmu_sync_done() and the free
+ * paths), which may then get a block size, type, level and logical birth.
+ * Its birth is 0, so claim, free, scrub and traversal skip it like any old
+ * hole.  The record's commit, and every commit after it, wait for its txg
+ * to sync (zl_lwb_error_txg), so replay ends at it.
+ */
+#define	ZIL_WRITE_FAILED_MAGIC	0x7a696c6661696c64ULL	/* "zilfaild" */
+
+#define	BP_SET_ZIL_WRITE_FAILED(bp, lsize)	do {			\
+	BP_ZERO(bp);							\
+	BP_SET_LSIZE(bp, lsize);					\
+	ZIO_SET_CHECKSUM(&(bp)->blk_cksum, ZIL_WRITE_FAILED_MAGIC, 0, 0, 0); \
+} while (0)
+
+#define	BP_IS_ZIL_WRITE_FAILED(bp)					\
+	(BP_IS_HOLE(bp) &&						\
+	(bp)->blk_cksum.zc_word[0] == ZIL_WRITE_FAILED_MAGIC)
+
+/*
  * A TX_WRITE record that carries data (WR_NEED_COPY) may be split across log
  * blocks.  Its pieces are marked in lr_flags so that replay will apply the
  * write only once all pieces are present, except that a write larger than
@@ -555,6 +581,11 @@ typedef struct zil_stats {
 	 */
 	kstat_named_t zil_replay_split_merged;
 	kstat_named_t zil_replay_split_dropped;
+	/*
+	 * Replays that ended at a TX_WRITE whose dmu_sync() write failed
+	 * (BP_IS_ZIL_WRITE_FAILED()).
+	 */
+	kstat_named_t zil_replay_write_failed;
 } zil_kstat_values_t;
 
 typedef struct zil_sums {
@@ -581,6 +612,7 @@ typedef struct zil_sums {
 	wmsum_t zil_itx_metaslab_slog_alloc;
 	wmsum_t zil_replay_split_merged;
 	wmsum_t zil_replay_split_dropped;
+	wmsum_t zil_replay_write_failed;
 } zil_sums_t;
 
 #define	ZIL_STAT_INCR(zil, stat, val) \

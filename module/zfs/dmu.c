@@ -2030,22 +2030,47 @@ dmu_assign_arcbuf_by_dbuf(dmu_buf_t *handle, uint64_t offset, arc_buf_t *buf,
 	return (err);
 }
 
+/*
+ * Return B_TRUE if the gang tree under gn holds size bytes, as reading it
+ * requires (zio_gang_tree_issue()), and B_FALSE if a gang member, at any
+ * level, failed to allocate.
+ */
+static boolean_t
+dmu_sync_gang_complete(zio_gang_node_t *gn, uint64_t size)
+{
+	uint64_t found = 0;
+
+	for (int g = 0; g < gbh_nblkptrs(gn->gn_gangblocksize); g++) {
+		blkptr_t *gbp = gbh_bp(gn->gn_gbh, g);
+
+		if (BP_IS_HOLE(gbp))
+			continue;
+		if (BP_IS_GANG(gbp) && (gn->gn_child[g] == NULL ||
+		    !dmu_sync_gang_complete(gn->gn_child[g],
+		    BP_GET_PSIZE(gbp))))
+			return (B_FALSE);
+		found += BP_GET_PSIZE(gbp);
+	}
+	return (found == size);
+}
+
 void
 dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
 {
 	(void) buf;
 	dmu_sync_arg_t *dsa = varg;
+	zgd_t *zgd = dsa->dsa_zgd;
+	blkptr_t *bp = zio->io_bp;
 
 	if (zio->io_error == 0) {
 		dbuf_dirty_record_t *dr = dsa->dsa_dr;
-		blkptr_t *bp = zio->io_bp;
 
 		if (BP_IS_HOLE(bp)) {
 			dmu_buf_t *db = NULL;
 			if (dr)
 				db = &(dr->dr_dbuf->db);
 			else
-				db = dsa->dsa_zgd->zgd_db;
+				db = zgd->zgd_db;
 			/*
 			 * A block of zeros may compress to a hole, but the
 			 * block size still needs to be known for replay.
@@ -2056,6 +2081,26 @@ dmu_sync_ready(zio_t *zio, arc_buf_t *buf, void *varg)
 			BP_SET_FILL(bp, 1);
 		}
 	}
+
+	/* A Direct I/O write (dmu_write_direct()) has no log record. */
+	if (zgd == NULL)
+		return;
+
+	/*
+	 * The log block is written once its dmu_sync() writes are READY, so
+	 * fill in the log record's blkptr now.  If this write failed to
+	 * allocate its block, our blkptr is a hole, which replay would read
+	 * as zeros.  If its gang members failed to (they are READY, but their
+	 * errors only reach us at DONE), it is an incomplete gang block.
+	 * Either way, mark the record instead.  The write keeps its own
+	 * blkptr, for zio_done() to free what was allocated.
+	 */
+	if (zio->io_error != 0 || (BP_IS_GANG(bp) &&
+	    zio->io_gang_tree != NULL &&
+	    !dmu_sync_gang_complete(zio->io_gang_tree, zio->io_size)))
+		BP_SET_ZIL_WRITE_FAILED(zgd->zgd_bp, zgd->zgd_db->db_size);
+	else
+		*zgd->zgd_bp = *bp;
 }
 
 static void
@@ -2139,6 +2184,8 @@ dmu_sync_done(zio_t *zio, arc_buf_t *buf, void *varg)
 			zil_lwb_add_block(dsw->dsw_zgd->zgd_lwb,
 			    dsw->dsw_zgd->zgd_bp);
 		} else {
+			BP_SET_ZIL_WRITE_FAILED(dsw->dsw_zgd->zgd_bp,
+			    dsw->dsw_zgd->zgd_db->db_size);
 			dsw->dsw_zio->io_error = zio->io_error;
 		}
 		dsw->dsw_done(dsw->dsw_zgd, zio->io_error);
@@ -2222,6 +2269,7 @@ dmu_sync_late_arrival(zio_t *pio, objset_t *os, dmu_sync_cb_t *done, zgd_t *zgd,
 	dsa->dsa_zgd = zgd;
 	dsa->dsa_tx = tx;
 	dsa->dsa_dio_verify_fails = NULL;
+	dsa->dsa_bp = *zgd->zgd_bp;
 
 	/*
 	 * Since we are currently syncing this txg, it's nontrivial to
@@ -2246,7 +2294,7 @@ dmu_sync_late_arrival(zio_t *pio, objset_t *os, dmu_sync_cb_t *done, zgd_t *zgd,
 	 */
 	zp->zp_nopwrite = B_FALSE;
 
-	zio_nowait(zio_write(pio, os->os_spa, dmu_tx_get_txg(tx), zgd->zgd_bp,
+	zio_nowait(zio_write(pio, os->os_spa, dmu_tx_get_txg(tx), &dsa->dsa_bp,
 	    abd_get_from_buf(zgd->zgd_db->db_data, zgd->zgd_db->db_size),
 	    zgd->zgd_db->db_size, zgd->zgd_db->db_size, zp,
 	    dmu_sync_late_arrival_ready, NULL, dmu_sync_late_arrival_done,
@@ -2276,7 +2324,9 @@ dmu_sync_late_arrival(zio_t *pio, objset_t *os, dmu_sync_cb_t *done, zgd_t *zgd,
  *		The caller should log this blkptr in the done callback.
  *		It is possible that the I/O will fail, in which case
  *		the error will be reported to the done callback and
- *		propagated to pio from zio_done().  If another dmu_sync()
+ *		propagated to pio from zio_done().  If it fails before
+ *		its blkptr is complete, *zgd_bp is marked as failed
+ *		(BP_SET_ZIL_WRITE_FAILED()) instead.  If another dmu_sync()
  *		of the block in this txg is in progress, *zgd_bp is set to
  *		its blkptr, and the done callback is called with its error,
  *		when it completes.  If one has completed, *zgd_bp is set to
@@ -2453,12 +2503,13 @@ dmu_sync(zio_t *pio, uint64_t txg, dmu_sync_cb_t *done, zgd_t *zgd)
 	dsa->dsa_dio_verify_fails = NULL;
 	list_create(&dsa->dsa_waiters, sizeof (dmu_sync_waiter_t),
 	    offsetof(dmu_sync_waiter_t, dsw_node));
+	dsa->dsa_bp = *zgd->zgd_bp;
 
 	dr->dt.dl.dr_override_state = DR_IN_DMU_SYNC;
 	dr->dt.dl.dr_sync_arg = dsa;
 	mutex_exit(&db->db_mtx);
 
-	zio_nowait(arc_write(pio, os->os_spa, txg, zgd->zgd_bp,
+	zio_nowait(arc_write(pio, os->os_spa, txg, &dsa->dsa_bp,
 	    dr->dt.dl.dr_data, !DBUF_IS_CACHEABLE(db),
 	    dbuf_is_l2cacheable(db, NULL), &zp, dmu_sync_ready, NULL,
 	    dmu_sync_done, dsa, ZIO_PRIORITY_SYNC_WRITE, ZIO_FLAG_CANFAIL,
