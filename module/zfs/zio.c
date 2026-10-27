@@ -851,14 +851,14 @@ zio_next_init(zio_next_t *next)
 __attribute__((always_inline))
 static inline void
 zio_notify_parent(zio_t *pio, zio_t *zio, enum zio_wait_type wait,
-    zio_next_t *nextp)
+    int error, zio_next_t *nextp)
 {
 	uint64_t *countp = &pio->io_children[zio->io_child_type][wait];
 	int *errorp = &pio->io_child_error[zio->io_child_type];
 
 	mutex_enter(&pio->io_lock);
-	if (zio->io_error && !(zio->io_flags & ZIO_FLAG_DONT_PROPAGATE))
-		*errorp = zio_worst_error(*errorp, zio->io_error);
+	if (error && !(zio->io_flags & ZIO_FLAG_DONT_PROPAGATE))
+		*errorp = zio_worst_error(*errorp, error);
 	pio->io_post |= zio->io_post;
 	ASSERT3U(*countp, >, 0);
 
@@ -5854,6 +5854,65 @@ zio_worst_error(int e1, int e2)
  * I/O completion
  * ==========================================================================
  */
+/*
+ * A throttled write that has allocated, but skips its I/O at READY (see
+ * "Errors at READY" in zio_impl.h), has no vdev children to release its
+ * throttle accounting in zio_dva_throttle_done().  Release it now, as they
+ * would have: per DVA, the metaslab group queue depth taken when the block
+ * was allocated, and one copy's share of the class reservation.
+ */
+static void
+zio_dva_throttle_skip(zio_t *zio)
+{
+	blkptr_t *bp = zio->io_bp;
+	int ndvas = BP_GET_NDVAS(bp);
+	const void *tag = zio;
+	uint64_t size = zio->io_size;
+
+	ASSERT0(zio->io_error);
+	ASSERT3U(zio->io_type, ==, ZIO_TYPE_WRITE);
+	ASSERT3U(zio->io_priority, ==, ZIO_PRIORITY_ASYNC_WRITE);
+	ASSERT(ZIO_HAS_ALLOCATOR(zio));
+	ASSERT(zio->io_metaslab_class != NULL);
+	ASSERT(zio->io_metaslab_class->mc_alloc_throttle_enabled);
+	ASSERT0(zio->io_flags & ZIO_FLAG_NOPWRITE);
+
+	if (zio->io_child_type == ZIO_CHILD_GANG &&
+	    (zio->io_flags & ZIO_FLAG_IO_REWRITE)) {
+		/*
+		 * A gang header's rewrite: zio_write_gang_block() allocated
+		 * the header for its parent, tagged with the parent and the
+		 * original gang header size (see zio_dva_throttle_done()),
+		 * and reserved for the rewrite's own size and copies.
+		 */
+		tag = zio_unique_parent(zio);
+		size = SPA_OLD_GANGBLOCKSIZE;
+	} else {
+		ASSERT(IO_IS_ALLOCATING(zio));
+		/*
+		 * A write that ganged does no I/O of its own: its gang
+		 * header's rewrite and its gang members release its
+		 * accounting.
+		 */
+		if (BP_IS_GANG(bp))
+			return;
+		ASSERT3U(ndvas, ==, zio->io_prop.zp_copies);
+	}
+	ASSERT3S(ndvas, >, 0);
+
+	for (int d = 0; d < ndvas; d++) {
+		metaslab_group_alloc_decrement(zio->io_spa,
+		    DVA_GET_VDEV(&bp->blk_dva[d]), zio->io_allocator,
+		    METASLAB_ASYNC_ALLOC, size, tag);
+	}
+
+	if (metaslab_class_throttle_unreserve(zio->io_metaslab_class,
+	    zio->io_allocator, ndvas, zio->io_size)) {
+		zio_allocate_dispatch(zio->io_metaslab_class,
+		    zio->io_allocator);
+	}
+}
+
 static zio_t *
 zio_ready(zio_t *zio)
 {
@@ -5890,10 +5949,34 @@ zio_ready(zio_t *zio)
 		zio->io_bp_copy = *bp;
 #endif
 
-	if (zio->io_error != 0) {
+	/*
+	 * The READY rule (see "Errors at READY" in zio_impl.h): if we, or
+	 * a logical or gang child, have failed by now, we do no I/O of our
+	 * own, and pass the error to our parents now.  A child's error only
+	 * becomes ours in zio_done().
+	 */
+	mutex_enter(&zio->io_lock);
+	zio->io_state[ZIO_WAIT_READY] = 1;
+	int error = zio->io_error;
+	if (error == 0) {
+		error = zio->io_child_error[ZIO_CHILD_LOGICAL];
+		if (error == 0)
+			error = zio->io_child_error[ZIO_CHILD_GANG];
+	}
+	pio = zio_walk_parents(zio, &zl);
+	mutex_exit(&zio->io_lock);
+
+	if (error != 0) {
 		zio->io_pipeline = ZIO_INTERLOCK_PIPELINE;
 
-		if (zio->io_flags & ZIO_FLAG_ALLOC_THROTTLED) {
+		if ((zio->io_flags & ZIO_FLAG_ALLOC_THROTTLED) &&
+		    zio->io_error == 0) {
+			/*
+			 * We allocated, but a child failed: release the
+			 * throttle accounting that our vdev I/O would have.
+			 */
+			zio_dva_throttle_skip(zio);
+		} else if (zio->io_flags & ZIO_FLAG_ALLOC_THROTTLED) {
 			ASSERT(IO_IS_ALLOCATING(zio));
 			ASSERT(zio->io_priority == ZIO_PRIORITY_ASYNC_WRITE);
 			ASSERT(zio->io_metaslab_class != NULL);
@@ -5912,11 +5995,6 @@ zio_ready(zio_t *zio)
 		}
 	}
 
-	mutex_enter(&zio->io_lock);
-	zio->io_state[ZIO_WAIT_READY] = 1;
-	pio = zio_walk_parents(zio, &zl);
-	mutex_exit(&zio->io_lock);
-
 	/*
 	 * As we notify zio's parents, new parents could be added.
 	 * New parents go to the head of zio's io_parent_list, however,
@@ -5928,7 +6006,7 @@ zio_ready(zio_t *zio)
 	zio_next_init(&next);
 	for (; pio != NULL; pio = pio_next) {
 		pio_next = zio_walk_parents(zio, &zl);
-		zio_notify_parent(pio, zio, ZIO_WAIT_READY, &next);
+		zio_notify_parent(pio, zio, ZIO_WAIT_READY, error, &next);
 	}
 	ASSERT3P(zio->io_exec_next, ==, NULL);
 	zio->io_exec_next = next.zn_list;
@@ -6308,7 +6386,7 @@ zio_done(zio_t *zio)
 				 * bother with the "next" list.
 				 */
 				zio_notify_parent(pio, zio, ZIO_WAIT_DONE,
-				    NULL);
+				    zio->io_error, NULL);
 			}
 		}
 
@@ -6324,7 +6402,8 @@ zio_done(zio_t *zio)
 			 * This is a rare code path, so we don't bother with
 			 * the "next" list.
 			 */
-			zio_notify_parent(pio, zio, ZIO_WAIT_DONE, NULL);
+			zio_notify_parent(pio, zio, ZIO_WAIT_DONE,
+			    zio->io_error, NULL);
 		} else if (zio->io_post & ZIO_POST_SUSPEND) {
 			/*
 			 * We'd fail again if we reexecuted now, so suspend
@@ -6401,7 +6480,8 @@ zio_done(zio_t *zio)
 		zio_link_t *remove_zl = zl;
 		pio_next = zio_walk_parents(zio, &zl);
 		zio_remove_child(pio, zio, remove_zl);
-		zio_notify_parent(pio, zio, ZIO_WAIT_DONE, &next);
+		zio_notify_parent(pio, zio, ZIO_WAIT_DONE, zio->io_error,
+		    &next);
 	}
 
 	if (zio->io_waiter != NULL) {
