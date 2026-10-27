@@ -53,6 +53,23 @@ extern "C" {
  * and is used to coordinate the dependencies between I/Os that are being
  * issued (i.e. the parent/child relationship).
  *
+ * Errors at READY:
+ * A zio is READY once its block pointer is final, and its parents may then
+ * use it: a write waits for its logical children to be READY before it
+ * computes its checksum, so that the block pointers in its data (such as
+ * those of the dmu_sync() writes in a ZIL block) are filled in.  If a zio,
+ * or one of its logical or gang children, has failed by the time it is
+ * READY, its block pointer, or those in its data, may be incomplete.  So
+ * it switches to the interlock pipeline, doing no I/O of its own, and
+ * passes the error to its parents at READY, so that they do the same; a
+ * zio_null() in between doesn't stop it.  A child's error only becomes the
+ * zio's own (io_error) in zio_done(), so that vdev stats and FMA reports
+ * see only its own errors.  The exception is a throttled write that has
+ * allocated: only its vdev I/O releases its throttle accounting, so it
+ * does its I/O, and passes its children's errors at DONE.  Throttled
+ * writes are those of syncing context, where a failed child suspends or
+ * reexecutes the txg, so nothing refers to the block it writes.
+ *
  * Vdev child Pipeline:
  * The vdev child pipeline is responsible for performing the physical I/O.
  * It is in this pipeline where the I/O are queued and possibly cached.
