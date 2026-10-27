@@ -525,6 +525,10 @@ zvol_replay_write(void *arg1, void *arg2, boolean_t byteswap)
 	if (byteswap)
 		byteswap_uint64_array(lr, sizeof (*lr));
 
+	/* zil_replay_log_record() ends replay at a failed write. */
+	ASSERT(lr->lr_common.lrc_reclen != sizeof (lr_write_t) ||
+	    !BP_IS_ZIL_WRITE_FAILED(&lr->lr_blkptr));
+
 	offset = lr->lr_offset;
 	length = lr->lr_length;
 

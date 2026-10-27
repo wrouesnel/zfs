@@ -113,6 +113,7 @@ static zil_kstat_values_t zil_stats = {
 	{ "zil_itx_metaslab_slog_alloc",	KSTAT_DATA_UINT64 },
 	{ "zil_replay_split_merged",		KSTAT_DATA_UINT64 },
 	{ "zil_replay_split_dropped",		KSTAT_DATA_UINT64 },
+	{ "zil_replay_write_failed",		KSTAT_DATA_UINT64 },
 };
 
 static zil_sums_t zil_sums_global;
@@ -380,6 +381,7 @@ zil_sums_init(zil_sums_t *zs)
 	wmsum_init(&zs->zil_itx_metaslab_slog_alloc, 0);
 	wmsum_init(&zs->zil_replay_split_merged, 0);
 	wmsum_init(&zs->zil_replay_split_dropped, 0);
+	wmsum_init(&zs->zil_replay_write_failed, 0);
 }
 
 void
@@ -408,6 +410,7 @@ zil_sums_fini(zil_sums_t *zs)
 	wmsum_fini(&zs->zil_itx_metaslab_slog_alloc);
 	wmsum_fini(&zs->zil_replay_split_merged);
 	wmsum_fini(&zs->zil_replay_split_dropped);
+	wmsum_fini(&zs->zil_replay_write_failed);
 }
 
 void
@@ -459,6 +462,8 @@ zil_kstat_values_update(zil_kstat_values_t *zs, zil_sums_t *zil_sums)
 	    wmsum_value(&zil_sums->zil_replay_split_merged);
 	zs->zil_replay_split_dropped.value.ui64 =
 	    wmsum_value(&zil_sums->zil_replay_split_dropped);
+	zs->zil_replay_write_failed.value.ui64 =
+	    wmsum_value(&zil_sums->zil_replay_write_failed);
 }
 
 /*
@@ -5058,6 +5063,24 @@ zil_replay_log_record(zilog_t *zilog, const lr_t *lr, void *zra,
 
 	if (txtype == 0 || txtype >= TX_MAX_TYPE)
 		return (zil_replay_error(zilog, lr, EINVAL));
+
+	/*
+	 * A TX_WRITE whose dmu_sync() write failed has no data.  Its commit,
+	 * and every later one, waited for its txg to sync, so the log ends
+	 * here.  Replaying later records without it could make a state that
+	 * never existed.
+	 */
+	if (txtype == TX_WRITE && reclen == sizeof (lr_write_t) &&
+	    BP_IS_ZIL_WRITE_FAILED(&((const lr_write_t *)lr)->lr_blkptr)) {
+		char name[ZFS_MAX_DATASET_NAME_LEN];
+
+		zilog->zl_replaying_seq--;
+		ZIL_STAT_BUMP(zilog, zil_replay_write_failed);
+		dmu_objset_name(zilog->zl_os, name);
+		cmn_err(CE_NOTE, "ZFS replay ends at a failed write, "
+		    "dataset %s, seq 0x%llx", name, (u_longlong_t)lr->lrc_seq);
+		return (SET_ERROR(ENODATA));
+	}
 
 	/*
 	 * If this record type can be logged out of order, the object

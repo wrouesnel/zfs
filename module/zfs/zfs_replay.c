@@ -783,6 +783,10 @@ zfs_replay_write(void *arg1, void *arg2, boolean_t byteswap)
 	if (byteswap)
 		byteswap_uint64_array(lr, sizeof (*lr));
 
+	/* zil_replay_log_record() ends replay at a failed write. */
+	ASSERT(lr->lr_common.lrc_reclen != sizeof (lr_write_t) ||
+	    !BP_IS_ZIL_WRITE_FAILED(&lr->lr_blkptr));
+
 	if ((error = zfs_zget(zfsvfs, lr->lr_foid, &zp)) != 0) {
 		/*
 		 * As we can log writes out of order, it's possible the
