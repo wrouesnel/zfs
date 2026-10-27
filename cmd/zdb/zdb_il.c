@@ -177,7 +177,9 @@ zil_prt_rec_write(zilog_t *zilog, int txtype, const void *arg)
 		if (BP_IS_HOLE(bp)) {
 			(void) printf("\t\t\tLSIZE 0x%llx\n",
 			    (u_longlong_t)BP_GET_LSIZE(bp));
-			(void) printf("%s<hole>\n", tab_prefix);
+			(void) printf("%s%s\n", tab_prefix,
+			    BP_IS_ZIL_WRITE_FAILED(bp) ?
+			    "<failed write: replay ends here>" : "<hole>");
 			return;
 		}
 		if (BP_GET_BIRTH(bp) < zilog->zl_header->zh_claim_txg) {

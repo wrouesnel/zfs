@@ -264,6 +264,7 @@ typedef struct dmu_sync_arg {
 	dmu_tx_t		*dsa_tx;
 	uint32_t		*dsa_dio_verify_fails;
 	list_t			dsa_waiters;	/* dmu_sync_waiter_t */
+	blkptr_t		dsa_bp;		/* the write's blkptr */
 } dmu_sync_arg_t;
 
 void dmu_sync_done(zio_t *, arc_buf_t *buf, void *varg);
