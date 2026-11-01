@@ -253,7 +253,6 @@ if sys.platform.startswith('freebsd'):
         'delegate/zfs_allow_003_pos': ['FAIL', known_reason],
         'pool_checkpoint/checkpoint_big_rewind': ['FAIL', 12622],
         'pool_checkpoint/checkpoint_indirect': ['FAIL', 12623],
-        'resilver/resilver_restart_001': ['FAIL', known_reason],
         'zvol/zvol_misc/zvol_misc_volmode': ['FAIL', 16668],
         'bclone/bclone_crossfs_corner_cases': ['SKIP', cfr_cross_reason],
         'bclone/bclone_crossfs_corner_cases_limited':
