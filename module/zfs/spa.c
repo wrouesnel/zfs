@@ -7036,8 +7036,17 @@ spa_get_stats(const char *name, nvlist_t **config,
 		 * This still leaves a window of inconsistency where the spares
 		 * or l2cache devices could change and the config would be
 		 * self-inconsistent.
+		 *
+		 * As in spa_config_generate(), don't queue behind a writer
+		 * while the pool is suspended: zpool clear and zpool status
+		 * get here, and the writer may be waiting for a txg sync that
+		 * only zpool clear can resume.
 		 */
-		spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
+		if (spa_suspended(spa))
+			spa_config_enter_priority(spa, SCL_CONFIG, FTAG,
+			    RW_READER);
+		else
+			spa_config_enter(spa, SCL_CONFIG, FTAG, RW_READER);
 
 		if (*config != NULL) {
 			uint64_t loadtimes[2];

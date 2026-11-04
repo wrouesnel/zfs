@@ -323,7 +323,21 @@ spa_config_generate(spa_t *spa, vdev_t *vd, uint64_t txg, int getstats)
 	if (vd == NULL) {
 		vd = rvd;
 		locked = B_TRUE;
-		spa_config_enter(spa, SCL_CONFIG | SCL_STATE, FTAG, RW_READER);
+		/*
+		 * zpool clear needs this config before it can resume a
+		 * suspended pool.  While the pool is suspended, spa_sync()
+		 * may hold SCL_CONFIG as reader until the resume, and a
+		 * writer queued behind it (such as spa_vdev_resilver_done()
+		 * in the async thread) would keep us out for good.  So cut
+		 * in front of queued writers while the pool is suspended.
+		 */
+		if (spa_suspended(spa)) {
+			spa_config_enter_priority(spa, SCL_CONFIG | SCL_STATE,
+			    FTAG, RW_READER);
+		} else {
+			spa_config_enter(spa, SCL_CONFIG | SCL_STATE, FTAG,
+			    RW_READER);
+		}
 	}
 
 	ASSERT(spa_config_held(spa, SCL_CONFIG | SCL_STATE, RW_READER) ==
