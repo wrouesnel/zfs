@@ -25,6 +25,12 @@
 #	3. Inject slow io errors
 #	4. Verify that ZED degrades vdev
 #
+#	The cases that must not degrade the vdev don't wait for a fixed
+#	time.  The delay ereports are posted before the slow reads
+#	return, so they are counted right after the reads.  The test
+#	then waits until the ZED diagnosis engine has logged every one
+#	of them, and checks that it solved no fault and degraded nothing.
+#
 
 . $STF_SUITE/include/libtest.shlib
 
@@ -38,11 +44,15 @@ OLD_SLOW_IO_EVENTS=$(get_tunable SLOW_IO_EVENTS_PER_SECOND)
 
 verify_runnable "both"
 
+# Lines in the ZED log when the current case began.
+typeset -i LOG_MARK=0
+
 function do_setup
 {
 	log_must truncate -s 1G $VDEV
 	default_setup_noexit $VDEV
 	zed_events_drain
+	LOG_MARK=$(wc -l < $ZED_LOG)
 	log_must zfs set compression=off $TESTPOOL
 	log_must zfs set primarycache=none $TESTPOOL
 	log_must zfs set prefetch=none $TESTPOOL
@@ -99,6 +109,51 @@ function stop_slow_io
 	log_must zinject -c all
 }
 
+# What ZED has logged since the current case began.
+function zed_log_case
+{
+	tail -n +$((LOG_MARK + 1)) $ZED_LOG
+}
+
+function delay_events
+{
+	zpool events | grep -c "ereport\.fs\.zfs\.delay"
+}
+
+#
+# Wait for the ZED diagnosis engine to log every delay ereport of the
+# vdev, then check that it solved no fault and degraded nothing.  The
+# diagnosis engine logs each ereport of a case it hasn't solved.  The
+# wait has no fixed length: on a stalled system it lasts as long as ZED
+# needs.
+#
+function verify_diagnosed_no_degrade # events
+{
+	typeset -i events=$1
+	typeset guid=$(zpool get -Hp -o value guid $TESTPOOL $VDEV)
+	typeset pattern="error event 'ereport\.fs\.zfs\.delay', vdev $guid\$"
+	typeset -i seen=0
+	typeset -i solved=0
+	typeset -i i=0
+
+	while [[ $i -lt 300 ]]; do
+		seen=$(zed_log_case | grep -c "$pattern")
+		solved=$(zed_log_case | grep -c "solving fault")
+		[[ $seen -ge $events || $solved -gt 0 ]] && break
+		i=$((i+1))
+		sleep 1
+	done
+	log_note "ZED diagnosed $seen of $events delay events after $i seconds"
+	[[ $solved -eq 0 ]] || log_fail "expecting no fault, ZED solved $solved"
+	[[ $seen -ge $events ]] || \
+	    log_fail "ZED diagnosed only $seen of $events delay events"
+
+	typeset -i degrades=$(zed_log_case | grep -c "zpool_vdev_degrade")
+	[[ $degrades -eq 0 ]] || \
+	    log_fail "expecting no degrade events, found $degrades"
+	log_must check_vdev_state $TESTPOOL $VDEV "ONLINE"
+}
+
 # Test default ZED settings:
 #    inject 10 events over 2.5 seconds, should not degrade.
 function default_degrade
@@ -113,14 +168,10 @@ function default_degrade
 	stop_slow_io
 	log_note "$(zpool status -s $TESTPOOL)"
 
-	# give slow ZED a chance to process the delay events
-	sleep 18
-	log_note "$(zpool status -s $TESTPOOL)"
-
-	degrades=$(grep "zpool_vdev_degrade" $ZEDLET_DIR/zed.log | wc -l)
-	log_note $degrades vdev degrades in ZED log
-	[ $degrades -eq "0" ] || \
-		log_fail "expecting no degrade events, found $degrades"
+	typeset -i events=$(delay_events)
+	log_note "$events delay events found"
+	[[ $events -gt 0 ]] || log_fail "expecting delay events, found none"
+	verify_diagnosed_no_degrade $events
 
 	do_clean
 }
@@ -156,7 +207,7 @@ function slow_io_degrade
 	log_note "$events delay events found"
 
 	if [[ $events -ge "5" ]]; then
-		log_must wait_vdev_state $TESTPOOL $VDEV "DEGRADED" 10
+		log_must wait_vdev_state $TESTPOOL $VDEV "DEGRADED" 60
 	fi
 
 	do_clean
@@ -179,7 +230,10 @@ function slow_io_no_degrade
 	stop_slow_io
 	zpool sync
 
-	log_mustnot wait_vdev_state $TESTPOOL $VDEV "DEGRADED" 45
+	typeset -i events=$(delay_events)
+	log_note "$events delay events found"
+	[[ $events -gt 0 ]] || log_fail "expecting delay events, found none"
+	verify_diagnosed_no_degrade $events
 
 	do_clean
 }
@@ -204,21 +258,16 @@ function slow_io_degrade_disabled
 	zpool sync
 
 	#
-	# wait 60 seconds to confirm that zfs.delay was not generated.
+	# The reads were slow, but no zfs.delay was generated for them.
 	#
-	typeset -i i=0
-	typeset -i events=0
-	while [[ $i -lt 60 ]]; do
-		events=$(zpool events | grep "ereport\.fs\.zfs.delay" | wc -l)
-		i=$((i+1))
-		sleep 1
-	done
-	log_note "$events delay events found"
-
-	[ $events -eq "0" ] || \
+	typeset -i slow=$(zpool get -Hp -o value slow_ios $TESTPOOL $VDEV)
+	typeset -i events=$(delay_events)
+	log_note "$slow slow I/Os, $events delay events found"
+	[[ $slow -gt 0 ]] || log_fail "expecting slow I/Os, found none"
+	[[ $events -eq 0 ]] || \
 		log_fail "expecting no delay events, found $events"
+	verify_diagnosed_no_degrade 0
 
-	log_mustnot wait_vdev_state $TESTPOOL $VDEV "DEGRADED" 45
 	do_clean
 }
 
