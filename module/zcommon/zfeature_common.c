@@ -770,6 +770,11 @@ zpool_feature_init(void)
 	    ZFEATURE_FLAG_READONLY_COMPAT, ZFEATURE_TYPE_BOOLEAN, NULL,
 	    sfeatures);
 
+	zfeature_register(SPA_FEATURE_RAIDZ_EXPANSION_MULTI,
+	    "org.openzfs:raidz_expansion_multi", "raidz_expansion_multi",
+	    "Support for adding several disks in one raidz expansion",
+	    ZFEATURE_FLAG_MOS, ZFEATURE_TYPE_BOOLEAN, NULL, sfeatures);
+
 	zfeature_register(SPA_FEATURE_FAST_DEDUP,
 	    "com.klarasystems:fast_dedup", "fast_dedup",
 	    "Support for advanced deduplication",
