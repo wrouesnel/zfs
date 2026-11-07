@@ -2398,6 +2398,24 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 		rrw_exit(&dn->dn_objset->os_dsl_dataset->ds_bp_rwlock, FTAG);
 #endif
 
+	/*
+	 * Raise dn_maxblkid before this dirty record becomes visible, so no
+	 * one can see a dirty L0 block beyond dn_maxblkid (dmu_read_impl()
+	 * and the free path treat blocks past it as holes).  This must
+	 * happen before db_mtx is taken to preserve lock order.
+	 */
+	if (db->db_level == 0 && db->db_blkid != DMU_BONUS_BLKID &&
+	    db->db_blkid != DMU_SPILL_BLKID &&
+	    db->db_blkid > dn->dn_maxblkid) {
+		boolean_t have_read = !RW_WRITE_HELD(&dn->dn_struct_rwlock);
+
+		if (have_read)
+			rw_enter(&dn->dn_struct_rwlock, RW_READER);
+		dnode_new_blkid(dn, db->db_blkid, tx, have_read, B_FALSE);
+		if (have_read)
+			rw_exit(&dn->dn_struct_rwlock);
+	}
+
 	mutex_enter(&db->db_mtx);
 	/*
 	 * XXX make this true for indirects too?  The problem is that
