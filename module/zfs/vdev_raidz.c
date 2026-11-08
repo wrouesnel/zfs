@@ -874,6 +874,7 @@ vdev_raidz_map_alloc_expanded(zio_t *zio,
 		if (b + cols > reflow_offset_synced >> ashift) {
 			row_phys_cols = old_physical_cols;
 			rr->rr_old_layout = B_TRUE;
+			rr->rr_old_width = old_physical_cols;
 		} else if (use_scratch) {
 			row_use_scratch = B_TRUE;
 		}
@@ -3481,10 +3482,10 @@ raidz_restore_orig_data(raidz_map_t *rm)
  * values imagine a child failed in the expansion before that, etc.
  *
  * While an expansion is in progress, a row that the reflow has not copied yet
- * is still at its old location, one child narrower (rr_old_layout), and its
- * sectors are numbered by that width.  The expansion in progress has not
- * moved them, so a child that failed before it is the child they are on now,
- * the same as one that failed since.  A block that straddles the reflow
+ * is still at its old location, rr_old_width children wide (rr_old_layout),
+ * and its sectors are numbered by that width.  The expansion in progress has
+ * not moved them, so a child that failed before it is the child they are on
+ * now, the same as one that failed since.  A block that straddles the reflow
  * offset has rows of both kinds, and the same failed child has to cover the
  * damage the reflow copied into its new rows as well as its old rows.
  */
@@ -3492,7 +3493,7 @@ static boolean_t
 raidz_simulate_failure(int physical_width, int original_width, int ashift,
     int i, raidz_row_t *rr, raidz_col_t *rc)
 {
-	int width = rr->rr_old_layout ? physical_width - 1 : physical_width;
+	int width = rr->rr_old_layout ? rr->rr_old_width : physical_width;
 	uint64_t sector_id = width * (rc->rc_offset >> ashift) +
 	    rc->rc_devidx;
 

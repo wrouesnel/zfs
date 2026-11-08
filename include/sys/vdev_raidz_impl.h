@@ -127,6 +127,7 @@ typedef struct raidz_row {
 	int rr_nempty;			/* empty sectors included in parity */
 	int rr_outlier_cnt;		/* Count of latency outlier devices */
 	boolean_t rr_old_layout;	/* Not yet reflowed by an expansion */
+	int rr_old_width;		/* Children of the old layout */
 #ifdef ZFS_DEBUG
 	uint64_t rr_offset;		/* Logical offset for *_io_verify() */
 	uint64_t rr_size;		/* Physical size for *_io_verify() */
