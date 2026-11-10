@@ -657,6 +657,13 @@ vdev_config_generate_impl(spa_t *spa, vdev_t *vd, nvlist_t *nv,
 	if (getstats) {
 		vdev_config_generate_stats(vd, nv);
 
+		/*
+		 * A replacement waits for this device to supply data that
+		 * no other device could.
+		 */
+		if (vd->vdev_ops->vdev_op_leaf && vdev_replace_held(vd))
+			fnvlist_add_boolean(nv, ZPOOL_CONFIG_REPLACE_HELD);
+
 		root_vdev_actions_getprogress(vd, nv);
 		top_vdev_actions_getprogress(vd, nv);
 
