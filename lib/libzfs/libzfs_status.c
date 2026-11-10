@@ -72,6 +72,7 @@ static const char *const zfs_msgid_table[] = {
 	 *	ZPOOL_STATUS_UNSUP_FEAT_WRITE
 	 *	ZPOOL_STATUS_FAULTED_DEV_R
 	 *	ZPOOL_STATUS_FAULTED_DEV_NR
+	 *	ZPOOL_STATUS_REPLACE_HELD
 	 *	ZPOOL_STATUS_VERSION_OLDER
 	 *	ZPOOL_STATUS_FEAT_DISABLED
 	 *	ZPOOL_STATUS_RESILVERING
@@ -149,6 +150,30 @@ vdev_non_native_ashift(vdev_stat_t *vs, uint_t vsc, void *arg)
  *   - ENXIO if any device is problematic
  *   - 0 (zero) otherwise
  */
+/*
+ * Look for the old device of a replacement that can't complete because only
+ * that device may still hold some of the data its replacement is missing.
+ */
+static boolean_t
+find_replace_held(nvlist_t *vdev)
+{
+	nvlist_t **child;
+	uint_t c, children;
+
+	if (nvlist_exists(vdev, ZPOOL_CONFIG_REPLACE_HELD))
+		return (B_TRUE);
+
+	if (nvlist_lookup_nvlist_array(vdev, ZPOOL_CONFIG_CHILDREN, &child,
+	    &children) == 0) {
+		for (c = 0; c < children; c++) {
+			if (find_replace_held(child[c]))
+				return (B_TRUE);
+		}
+	}
+
+	return (B_FALSE);
+}
+
 static int
 find_vdev_problem(nvlist_t *vdev, int (*func)(vdev_stat_t *, uint_t, void *),
     void *arg, boolean_t ignore_replacing)
@@ -405,6 +430,13 @@ check_status(nvlist_t *config, boolean_t isimport,
 	if (vs->vs_state == VDEV_STATE_CANT_OPEN &&
 	    vs->vs_aux == VDEV_AUX_CORRUPT_DATA)
 		return (ZPOOL_STATUS_CORRUPT_POOL);
+
+	/*
+	 * A replacement waiting for data that only the old device may hold.
+	 * This also explains the data errors reported below.
+	 */
+	if (!isimport && find_replace_held(nvroot))
+		return (ZPOOL_STATUS_REPLACE_HELD);
 
 	/*
 	 * Persistent data errors.

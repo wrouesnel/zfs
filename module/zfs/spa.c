@@ -9936,8 +9936,9 @@ spa_vdev_resilver_done_hunt(vdev_t *vd)
 		newvd = vd->vdev_child[vd->vdev_children - 1];
 		oldvd = vd->vdev_child[0];
 
-		if (vdev_dtl_empty(newvd, DTL_MISSING) &&
-		    vdev_dtl_empty(newvd, DTL_OUTAGE) &&
+		if (((vdev_dtl_empty(newvd, DTL_MISSING) &&
+		    vdev_dtl_empty(newvd, DTL_OUTAGE)) ||
+		    vdev_dtl_unrepaired_only(newvd, oldvd)) &&
 		    !vdev_dtl_required(oldvd))
 			return (oldvd);
 	}
@@ -9961,8 +9962,9 @@ spa_vdev_resilver_done_hunt(vdev_t *vd)
 		}
 
 		if (oldvd != NULL &&
-		    vdev_dtl_empty(newvd, DTL_MISSING) &&
-		    vdev_dtl_empty(newvd, DTL_OUTAGE) &&
+		    ((vdev_dtl_empty(newvd, DTL_MISSING) &&
+		    vdev_dtl_empty(newvd, DTL_OUTAGE)) ||
+		    vdev_dtl_unrepaired_only(newvd, oldvd)) &&
 		    !vdev_dtl_required(oldvd))
 			return (oldvd);
 

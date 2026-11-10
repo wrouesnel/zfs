@@ -6027,17 +6027,18 @@
       <enumerator name='ZPOOL_STATUS_FAULTED_DEV_R' value='20'/>
       <enumerator name='ZPOOL_STATUS_FAULTED_FDOM_R' value='21'/>
       <enumerator name='ZPOOL_STATUS_FAULTED_DEV_NR' value='22'/>
-      <enumerator name='ZPOOL_STATUS_VERSION_OLDER' value='23'/>
-      <enumerator name='ZPOOL_STATUS_FEAT_DISABLED' value='24'/>
-      <enumerator name='ZPOOL_STATUS_RESILVERING' value='25'/>
-      <enumerator name='ZPOOL_STATUS_OFFLINE_DEV' value='26'/>
-      <enumerator name='ZPOOL_STATUS_REMOVED_DEV' value='27'/>
-      <enumerator name='ZPOOL_STATUS_REBUILDING' value='28'/>
-      <enumerator name='ZPOOL_STATUS_REBUILD_SCRUB' value='29'/>
-      <enumerator name='ZPOOL_STATUS_NON_NATIVE_ASHIFT' value='30'/>
-      <enumerator name='ZPOOL_STATUS_COMPATIBILITY_ERR' value='31'/>
-      <enumerator name='ZPOOL_STATUS_INCOMPATIBLE_FEAT' value='32'/>
-      <enumerator name='ZPOOL_STATUS_OK' value='33'/>
+      <enumerator name='ZPOOL_STATUS_REPLACE_HELD' value='23'/>
+      <enumerator name='ZPOOL_STATUS_VERSION_OLDER' value='24'/>
+      <enumerator name='ZPOOL_STATUS_FEAT_DISABLED' value='25'/>
+      <enumerator name='ZPOOL_STATUS_RESILVERING' value='26'/>
+      <enumerator name='ZPOOL_STATUS_OFFLINE_DEV' value='27'/>
+      <enumerator name='ZPOOL_STATUS_REMOVED_DEV' value='28'/>
+      <enumerator name='ZPOOL_STATUS_REBUILDING' value='29'/>
+      <enumerator name='ZPOOL_STATUS_REBUILD_SCRUB' value='30'/>
+      <enumerator name='ZPOOL_STATUS_NON_NATIVE_ASHIFT' value='31'/>
+      <enumerator name='ZPOOL_STATUS_COMPATIBILITY_ERR' value='32'/>
+      <enumerator name='ZPOOL_STATUS_INCOMPATIBLE_FEAT' value='33'/>
+      <enumerator name='ZPOOL_STATUS_OK' value='34'/>
     </enum-decl>
     <typedef-decl name='zpool_status_t' type-id='5e770b40' id='d3dd6294'/>
     <enum-decl name='zpool_compat_status_t' naming-typedef-id='901b78d1' id='20676925'>

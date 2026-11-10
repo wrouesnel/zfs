@@ -449,6 +449,7 @@ typedef enum {
 	ZPOOL_STATUS_FAULTED_DEV_R,	/* faulted device with replicas */
 	ZPOOL_STATUS_FAULTED_FDOM_R,	/* faulted fdomain with replicas */
 	ZPOOL_STATUS_FAULTED_DEV_NR,	/* faulted device with no replicas */
+	ZPOOL_STATUS_REPLACE_HELD,	/* replace waits for the old device */
 
 	/*
 	 * The following are not faults per se, but still an error possibly

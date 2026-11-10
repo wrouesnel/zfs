@@ -17,7 +17,7 @@
 .\" Copyright 2017 Nexenta Systems, Inc.
 .\" Copyright (c) 2017 Open-E, Inc. All Rights Reserved.
 .\"
-.Dd July 11, 2022
+.Dd November 11, 2026
 .Dt ZPOOL-REPLACE 8
 .Os
 .
@@ -59,6 +59,28 @@ In this case, the new disk may have the same
 .Pa /dev
 path as the old device, even though it is actually a different disk.
 ZFS recognizes this.
+.Pp
+If the resilver cannot read some data from any other device, the replacement
+still completes when
+.Ar device
+cannot supply that data either, for example because it is missing or has been
+removed.
+The data is then lost, and
+.Nm zpool Cm status Fl v
+lists the affected files.
+If
+.Ar device
+is faulted or offline but still attached, it may still hold that data, so it
+stays in the pool and
+.Nm zpool Cm status
+reports that the replacement cannot finish.
+Bring it back with
+.Nm zpool Cm clear
+or
+.Nm zpool Cm online
+so that a resilver can copy the data from it, or detach it with
+.Nm zpool Cm detach
+to accept the loss of that data.
 .Bl -tag -width Ds
 .It Fl f
 Forces use of

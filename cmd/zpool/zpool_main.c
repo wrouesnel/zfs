@@ -3125,6 +3125,9 @@ print_status_config(zpool_handle_t *zhp, status_cbdata_t *cb, const char *name,
 		(void) printf("  (non-allocating)");
 	}
 
+	if (nvlist_exists(nv, ZPOOL_CONFIG_REPLACE_HELD))
+		(void) printf("  (may hold missing data)");
+
 	/* The root vdev has the scrub/resilver stats */
 	root = fnvlist_lookup_nvlist(zpool_get_config(zhp, NULL),
 	    ZPOOL_CONFIG_VDEV_TREE);
@@ -9669,6 +9672,10 @@ vdev_stats_nvlist(zpool_handle_t *zhp, status_cbdata_t *cb, nvlist_t *nv,
 		nice_num_str_nvlist(vds, "noalloc", vs->vs_noalloc,
 		    B_TRUE, cb->cb_json_as_int, ZFS_NICENUM_1024);
 	}
+	if (nvlist_exists(nv, ZPOOL_CONFIG_REPLACE_HELD)) {
+		nice_num_str_nvlist(vds, "replace_held", 1, B_TRUE,
+		    cb->cb_json_as_int, ZFS_NICENUM_1024);
+	}
 
 	if (cb->vcdl != NULL) {
 		if (nvlist_lookup_string(nv, ZPOOL_CONFIG_PATH, &path) == 0) {
@@ -11190,6 +11197,22 @@ print_status_reason(zpool_handle_t *zhp, status_cbdata_t *cbp,
 		(void) snprintf(action, AC_SIZE,
 		    "Replace the faulted device, "
 		    "or use 'zpool clear' to mark the device\n\trepaired.\n");
+		break;
+
+	case ZPOOL_STATUS_REPLACE_HELD:
+		(void) snprintf(status, ST_SIZE,
+		    "One or more devices cannot "
+		    "finish replacing.  Some data could not be\n\tread from "
+		    "any other device, and only the device being replaced "
+		    "may\n\tstill hold it.\n");
+		(void) snprintf(action, AC_SIZE,
+		    "Make sure the device being "
+		    "replaced is attached, and bring it back\n\twith 'zpool "
+		    "clear' or 'zpool online'.  A resilver then copies the\n\t"
+		    "data from it ('zpool resilver' starts one if needed).  To "
+		    "accept\n\tthe loss of that data instead, detach the "
+		    "device with 'zpool detach';\n\tthe files listed by "
+		    "'zpool status -v' will then be permanently lost.\n");
 		break;
 
 	case ZPOOL_STATUS_FAULTED_FDOM_R:
