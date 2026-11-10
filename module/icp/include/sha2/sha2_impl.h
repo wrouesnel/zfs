@@ -46,6 +46,18 @@ typedef struct {
 extern const sha256_ops_t *sha256_get_ops(void);
 extern const sha512_ops_t *sha512_get_ops(void);
 
+/* Self-test messages from NIST's SHA-2 examples. */
+#define	SELFTEST_MSG_ABC	"abc"
+#define	SELFTEST_MSG_448	\
+	"abcdbcdecdefdefgefghfghighijhijkijkljklmklmnlmnomnopnopq"
+#define	SELFTEST_MSG_896	\
+	"abcdefghbcdefghicdefghijdefghijkefghijklfghijklmghijklmn" \
+	"hijklmnoijklmnopjklmnopqklmnopqrlmnopqrsmnopqrstnopqrstu"
+
+/* Check an implementation against known answers; true if it passes. */
+extern boolean_t sha256_impl_selftest(const sha256_ops_t *ops);
+extern boolean_t sha512_impl_selftest(const sha512_ops_t *ops);
+
 typedef enum {
 	SHA1_TYPE,
 	SHA256_TYPE,
