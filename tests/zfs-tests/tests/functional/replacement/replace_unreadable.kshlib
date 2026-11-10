@@ -1,0 +1,198 @@
+# SPDX-License-Identifier: CDDL-1.0
+#
+# This file and its contents are supplied under the terms of the
+# Common Development and Distribution License ("CDDL"), version 1.0.
+# You may only use this file in accordance with the terms of version
+# 1.0 of the CDDL.
+#
+# A full copy of the text of the CDDL should have accompanied this
+# source.  A copy of the CDDL is also available via the Internet at
+# https://opensource.org/license/CDDL-1.0.
+#
+
+#
+# Helpers for replacing a device of a two-way mirror whose other device
+# can't supply some blocks: replace_dead_unreadable and
+# replace_faulted_unreadable.
+#
+
+. $STF_SUITE/include/libtest.shlib
+. $STF_SUITE/tests/functional/replacement/replacement.cfg
+
+UNREADABLE_DIR=$TEST_BASE_DIR/replace_unreadable
+NFILES=16
+BAD="3 7 11"
+
+# The status and action "zpool status" shows while a replacement waits
+# for data that only the old device may hold.
+REPLACE_HELD_TEXT=$(cat <<'EOT'
+status: One or more devices cannot finish replacing.  Some data could not be
+	read from any other device, and only the device being replaced may
+	still hold it.
+action: Make sure the device being replaced is attached, and bring it back
+	with 'zpool clear' or 'zpool online'.  A resilver then copies the
+	data from it ('zpool resilver' starts one if needed).  To accept
+	the loss of that data instead, detach the device with 'zpool detach';
+	the files listed by 'zpool status -v' will then be permanently lost.
+EOT
+)
+
+function unreadable_cleanup
+{
+	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
+	rm -rf $UNREADABLE_DIR
+}
+
+#
+# Create a mirror of a and b in $UNREADABLE_DIR, fill it with files, export
+# it, and overwrite b's copy of the first block of each file in $BAD, so
+# that only a can supply those blocks.  Sets mnt, aguid and sums.
+#
+function unreadable_mirror_create
+{
+	typeset i obj
+
+	unreadable_cleanup
+	log_must mkdir -p $UNREADABLE_DIR/gone
+	log_must truncate -s 256M $UNREADABLE_DIR/a $UNREADABLE_DIR/b \
+	    $UNREADABLE_DIR/c
+	log_must zpool create -f -o ashift=12 -O compression=off \
+	    -O primarycache=metadata $TESTPOOL1 \
+	    mirror $UNREADABLE_DIR/a $UNREADABLE_DIR/b
+	mnt=$(get_prop mountpoint $TESTPOOL1)
+	set -A sums
+	for i in $(seq $NFILES); do
+		log_must dd if=/dev/urandom of=$mnt/f$i bs=128k count=8 \
+		    status=none
+		sums[$i]=$(xxh128digest $mnt/f$i)
+	done
+	sync_pool $TESTPOOL1
+	aguid=$(zdb -l $UNREADABLE_DIR/a | awk '$1 == "guid:" { print $2; exit }')
+
+	# The DVA of the first data block of each damaged file.
+	set -A dvas
+	for i in $BAD; do
+		obj=$(ls -i $mnt/f$i | awk '{ print $1 }')
+		# "0  L0 0:offset:asize ...": offset:asize of the copy.
+		dvas[$i]=$(zdb -dddddd $TESTPOOL1/ $obj |
+		    awk '$2 == "L0" { sub(/^0:/, "", $3); print $3; exit }')
+		[[ -n "${dvas[$i]}" ]] || log_fail "no DVA for $mnt/f$i"
+	done
+	log_must zpool export $TESTPOOL1
+
+	# Overwrite b's copy, past the 4 MiB of front labels and boot area.
+	for i in $BAD; do
+		typeset -i off=$((16#${dvas[$i]%%:*}))
+		typeset -i asize=$((16#${dvas[$i]##*:}))
+		log_must dd if=/dev/urandom of=$UNREADABLE_DIR/b bs=4096 \
+		    conv=notrunc status=none seek=$((off / 4096 + 1024)) \
+		    count=$((asize / 4096))
+	done
+}
+
+function unreadable_import
+{
+	log_must zpool import -d $UNREADABLE_DIR $TESTPOOL1
+}
+
+# Errors reported by the last resilver.
+function resilver_errors
+{
+	zpool status $TESTPOOL1 |
+	    sed -n 's/.*resilvered.* with \([0-9]*\) errors.*/\1/p'
+}
+
+function resilver_starts
+{
+	zpool events | grep -cF "sysevent.fs.zfs.resilver_start"
+}
+
+# The status and action lines of "zpool status".
+function status_action
+{
+	zpool status $TESTPOOL1 | awk '/^ *scan:|^ *see:|^config:/ { exit }
+	    /^status:/ { p = 1 } p'
+}
+
+# Check whether "zpool status" says that the replacement waits for a.
+function check_replace_held # mode
+{
+	typeset mode=$1
+
+	if [[ "$(status_action)" != "$REPLACE_HELD_TEXT" ]]; then
+		zpool status -v $TESTPOOL1
+		log_fail "$mode: zpool status doesn't explain the replacement"
+	fi
+	zpool status -g $TESTPOOL1 | grep -w $aguid |
+	    grep -qF "(may hold missing data)" ||
+	    log_fail "$mode: a isn't marked as holding missing data"
+	zpool status -j $TESTPOOL1 | grep -qF '"replace_held"' ||
+	    log_fail "$mode: zpool status -j has no replace_held vdev"
+	zpool status -j $TESTPOOL1 | grep -qF "cannot finish replacing" ||
+	    log_fail "$mode: zpool status -j doesn't explain the replacement"
+	zpool status -x $TESTPOOL1 | grep -qF "cannot finish replacing" ||
+	    log_fail "$mode: zpool status -x doesn't report the pool"
+}
+
+function check_not_replace_held # mode
+{
+	typeset mode=$1
+
+	zpool status $TESTPOOL1 | grep -qF "cannot finish replacing" &&
+	    log_fail "$mode: zpool status still says the replacement waits"
+	zpool status $TESTPOOL1 | grep -qF "may hold missing data" &&
+	    log_fail "$mode: a device is still marked as holding missing data"
+	return 0
+}
+
+# Exactly the damaged files are listed as permanent errors.
+function check_damaged_listed # mode
+{
+	typeset mode=$1
+	typeset i listed
+
+	listed=$(zpool status -v $TESTPOOL1 | grep -c "^ *$mnt/f[0-9]*$")
+	for i in $BAD; do
+		zpool status -v $TESTPOOL1 | grep -q "^ *$mnt/f$i$" ||
+		    log_fail "$mode: $mnt/f$i not listed as damaged"
+	done
+	(( listed == $(echo $BAD | wc -w) )) ||
+	    log_fail "$mode: $listed files listed as damaged"
+}
+
+# The files that weren't damaged are intact; with "all", every file is.
+function check_files # mode [all]
+{
+	typeset mode=$1 all=$2
+	typeset i
+
+	for i in $(seq $NFILES); do
+		[[ -f $mnt/f$i ]] || continue
+		[[ -z "$all" && " $BAD " == *" $i "* ]] && continue
+		[[ "$(xxh128digest $mnt/f$i)" == "${sums[$i]}" ]] ||
+		    log_fail "$mode: $mnt/f$i is damaged"
+	done
+}
+
+# Two scrubs clear the error log; the pool must then be healthy, also after
+# an export and import.
+function check_clean # mode
+{
+	typeset mode=$1
+
+	sync_pool $TESTPOOL1
+	log_must zpool scrub -w $TESTPOOL1
+	log_must zpool scrub -w $TESTPOOL1
+	log_must zpool export $TESTPOOL1
+	unreadable_import
+	log_must wait_scrubbed $TESTPOOL1
+	zpool status -v $TESTPOOL1
+	log_must check_pool_status $TESTPOOL1 "errors" "No known data errors"
+	log_must check_state $TESTPOOL1 "" "ONLINE"
+	zpool status $TESTPOOL1 | grep -q "resilver in progress" &&
+	    log_fail "$mode: a resilver started after the import"
+	zpool status -g $TESTPOOL1 | grep -qw $aguid &&
+	    log_fail "$mode: the old device is still in the pool"
+	check_not_replace_held $mode
+	check_files $mode
+}
