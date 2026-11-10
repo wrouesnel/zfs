@@ -3251,7 +3251,7 @@ zfs_rename_check(znode_t *szp, znode_t *sdzp, znode_t *tdzp)
 static int
 zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
     vnode_t *tdvp, vnode_t **tvpp, struct componentname *tcnp,
-    cred_t *cr);
+    cred_t *cr, uint_t at_flags);
 
 /*
  * Move an entry from the provided source directory to the target
@@ -3262,6 +3262,7 @@ zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
  *		tdvp	- Target directory to contain the "new entry".
  *		tcnp	- New entry name.
  *		cr	- credentials of caller.
+ *		at_flags - AT_RENAME_* flags; only AT_RENAME_NOREPLACE
  *	INOUT:	svpp	- Source file
  *		tvpp	- Target file, may point to NULL initially
  *
@@ -3273,7 +3274,7 @@ zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 static int
 zfs_do_rename(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
     vnode_t *tdvp, vnode_t **tvpp, struct componentname *tcnp,
-    cred_t *cr)
+    cred_t *cr, uint_t at_flags)
 {
 	int	error;
 
@@ -3302,7 +3303,8 @@ zfs_do_rename(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 		return (error);
 	}
 
-	error = zfs_do_rename_impl(sdvp, svpp, scnp, tdvp, tvpp, tcnp, cr);
+	error = zfs_do_rename_impl(sdvp, svpp, scnp, tdvp, tvpp, tcnp, cr,
+	    at_flags);
 	VOP_UNLOCK(sdvp);
 	VOP_UNLOCK(*svpp);
 out:
@@ -3317,7 +3319,7 @@ out:
 static int
 zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
     vnode_t *tdvp, vnode_t **tvpp, struct componentname *tcnp,
-    cred_t *cr)
+    cred_t *cr, uint_t at_flags)
 {
 	dmu_tx_t	*tx;
 	zfsvfs_t	*zfsvfs;
@@ -3434,6 +3436,18 @@ zfs_do_rename_impl(vnode_t *sdvp, vnode_t **svpp, struct componentname *scnp,
 	 * Does target exist?
 	 */
 	if (tzp) {
+#ifdef AT_RENAME_NOREPLACE
+		/*
+		 * The VFS checks AT_RENAME_NOREPLACE before VOP_RENAME(), but
+		 * the target can appear while zfs_rename_relock() has the
+		 * vnodes unlocked.  Check again now that they are all locked.
+		 */
+		if ((at_flags & AT_RENAME_NOREPLACE) != 0) {
+			error = SET_ERROR(EEXIST);
+			goto out;
+		}
+#endif
+
 		/*
 		 * Source and target must be the same type.
 		 */
@@ -3586,7 +3600,7 @@ zfs_rename(znode_t *sdzp, const char *sname, znode_t *tdzp, const char *tname,
 		goto fail;
 	}
 
-	error = zfs_do_rename(sdvp, &svp, &scn, tdvp, &tvp, &tcn, cr);
+	error = zfs_do_rename(sdvp, &svp, &scn, tdvp, &tvp, &tcn, cr, 0);
 fail:
 	if (svp != NULL)
 		vrele(svp);
@@ -5521,6 +5535,7 @@ zfs_freebsd_rename(struct vop_rename_args *ap)
 	vnode_t *fvp = ap->a_fvp;
 	vnode_t *tdvp = ap->a_tdvp;
 	vnode_t *tvp = ap->a_tvp;
+	uint_t at_flags = 0;
 	int error = 0;
 
 #if __FreeBSD_version < 1400068
@@ -5536,15 +5551,42 @@ zfs_freebsd_rename(struct vop_rename_args *ap)
 	}
 #endif
 
+#ifdef AT_RENAME_NOREPLACE
+	/*
+	 * FreeBSD 15.1 and 16 pass the renameat2(2) AT_RENAME_* flags in
+	 * a_flags (vop_rename gained it with AT_RENAME_NOREPLACE).  Only
+	 * AT_RENAME_NOREPLACE is supported.  The others must fail: ignoring
+	 * AT_RENAME_EXCHANGE would replace the target instead of swapping
+	 * the two names, destroying the target.
+	 */
+	if (error == 0 && (ap->a_flags & ~AT_RENAME_NOREPLACE) != 0)
+		error = SET_ERROR(EOPNOTSUPP);
 	if (error == 0)
-		error = zfs_do_rename(fdvp, &fvp, ap->a_fcnp, tdvp, &tvp,
-		    ap->a_tcnp, ap->a_fcnp->cn_cred);
+		at_flags = ap->a_flags;
+#endif
 
-	vrele(fdvp);
-	vrele(fvp);
-	vrele(tdvp);
-	if (tvp != NULL)
-		vrele(tvp);
+	if (error == 0) {
+		error = zfs_do_rename(fdvp, &fvp, ap->a_fcnp, tdvp, &tvp,
+		    ap->a_tcnp, ap->a_fcnp->cn_cred, at_flags);
+		vrele(fdvp);
+		vrele(fvp);
+		vrele(tdvp);
+		if (tvp != NULL)
+			vrele(tvp);
+	} else {
+		/*
+		 * zfs_do_rename() was not called, so tdvp and tvp are still
+		 * locked, as VOP_RENAME() passed them.
+		 */
+		if (tdvp == tvp)
+			vrele(tdvp);
+		else
+			vput(tdvp);
+		if (tvp != NULL)
+			vput(tvp);
+		vrele(fdvp);
+		vrele(fvp);
+	}
 
 	return (error);
 }
