@@ -3239,6 +3239,8 @@ vdev_dtl_dirty(vdev_t *vd, vdev_dtl_type_t t, uint64_t txg, uint64_t size)
 		/* Clear whatever is there already. */
 		zfs_range_tree_clear(rt, txg, size);
 		zfs_range_tree_add(rt, txg, size);
+		if (t == DTL_MISSING)
+			vd->vdev_dtl_unrepaired = B_FALSE;
 	}
 	mutex_exit(&vd->vdev_dtl_lock);
 }
@@ -3266,6 +3268,51 @@ vdev_dtl_contains(vdev_t *vd, vdev_dtl_type_t t, uint64_t txg, uint64_t size)
 	mutex_exit(&vd->vdev_dtl_lock);
 
 	return (dirty);
+}
+
+typedef struct vdev_dtl_clip_arg {
+	zfs_range_tree_t	*vdca_rt;
+	uint64_t		vdca_start;
+	uint64_t		vdca_end;
+} vdev_dtl_clip_arg_t;
+
+static void
+vdev_dtl_add_clipped(void *arg, uint64_t start, uint64_t size)
+{
+	vdev_dtl_clip_arg_t *vdca = arg;
+	uint64_t s = MAX(start, vdca->vdca_start);
+	uint64_t e = MIN(start + size, vdca->vdca_end);
+
+	if (s < e) {
+		zfs_range_tree_clear(vdca->vdca_rt, s, e - s);
+		zfs_range_tree_add(vdca->vdca_rt, s, e - s);
+	}
+}
+
+/*
+ * A scan couldn't repair blocks born in [txg, txg + size): it couldn't read
+ * them from any copy.  Note the txgs that each leaf below vd is missing in
+ * its DTL_SCRUB, as a failed repair write does, so that completing the scan
+ * doesn't excise them from the leaf's DTL_MISSING.
+ */
+void
+vdev_dtl_scrub_unrepaired(vdev_t *vd, uint64_t txg, uint64_t size)
+{
+	for (uint64_t c = 0; c < vd->vdev_children; c++)
+		vdev_dtl_scrub_unrepaired(vd->vdev_child[c], txg, size);
+
+	if (!vd->vdev_ops->vdev_op_leaf)
+		return;
+
+	vdev_dtl_clip_arg_t vdca = {
+		.vdca_rt = vd->vdev_dtl[DTL_SCRUB],
+		.vdca_start = txg,
+		.vdca_end = txg + size,
+	};
+	mutex_enter(&vd->vdev_dtl_lock);
+	zfs_range_tree_walk(vd->vdev_dtl[DTL_MISSING], vdev_dtl_add_clipped,
+	    &vdca);
+	mutex_exit(&vd->vdev_dtl_lock);
 }
 
 boolean_t
@@ -3397,11 +3444,15 @@ vdev_dtl_should_excise(vdev_t *vd, boolean_t rebuild_done)
 		 * in all DTLs. If this device's max DTL is not part of this
 		 * scan (i.e. it is not in the range (scn_min_txg, scn_max_txg]
 		 * then it is not eligible for excision.
+		 *
+		 * The scan must cover the whole DTL.  vdev_resilver_txg (the
+		 * txg of the attach) need not be in its range: a resilver
+		 * that couldn't repair some blocks leaves only their txgs in
+		 * the DTL, which can lie entirely before or after it, and a
+		 * later resilver's range is set from what is left.
 		 */
 		if (vdev_dtl_max(vd) <= scn->scn_phys.scn_max_txg) {
 			ASSERT3U(scnp->scn_min_txg, <=, vdev_dtl_min(vd));
-			ASSERT3U(scnp->scn_min_txg, <, vd->vdev_resilver_txg);
-			ASSERT3U(vd->vdev_resilver_txg, <=, scnp->scn_max_txg);
 			return (B_TRUE);
 		}
 	}
@@ -3504,6 +3555,13 @@ vdev_dtl_reassess_impl(vdev_t *vd, uint64_t txg, uint64_t scrub_txg,
 			space_reftree_generate_map(&reftree,
 			    vd->vdev_dtl[DTL_MISSING], 1);
 			space_reftree_destroy(&reftree);
+
+			/*
+			 * What is left are the txgs the scan couldn't
+			 * repair (DTL_SCRUB).
+			 */
+			vd->vdev_dtl_unrepaired = !zfs_range_tree_is_empty(
+			    vd->vdev_dtl[DTL_MISSING]);
 
 			if (!zfs_range_tree_is_empty(
 			    vd->vdev_dtl[DTL_MISSING])) {
@@ -3902,6 +3960,118 @@ vdev_dtl_required(vdev_t *vd)
 	}
 
 	return (required);
+}
+
+typedef struct vdev_dtl_covered_arg {
+	zfs_range_tree_t	*vdcv_rt;
+	boolean_t		vdcv_covered;
+} vdev_dtl_covered_arg_t;
+
+static void
+vdev_dtl_covered_cb(void *arg, uint64_t start, uint64_t size)
+{
+	vdev_dtl_covered_arg_t *vdcv = arg;
+
+	if (!zfs_range_tree_contains(vdcv->vdcv_rt, start, size))
+		vdcv->vdcv_covered = B_FALSE;
+}
+
+/*
+ * A device that is gone: it couldn't be opened (missing or unusable) or it
+ * was removed.  A faulted or offline device is still attached and may
+ * still be read once it's cleared or brought online: ZFS faults a device
+ * for write errors or read errors elsewhere on it, and such a device can
+ * often still supply the blocks the others can't read.
+ */
+static boolean_t
+vdev_is_absent(vdev_t *vd)
+{
+	if (!vd->vdev_ops->vdev_op_leaf) {
+		for (uint64_t c = 0; c < vd->vdev_children; c++) {
+			if (!vdev_is_absent(vd->vdev_child[c]))
+				return (B_FALSE);
+		}
+		return (vd->vdev_children != 0);
+	}
+
+	return (vd->vdev_state == VDEV_STATE_CANT_OPEN ||
+	    vd->vdev_state == VDEV_STATE_REMOVED);
+}
+
+/*
+ * What newvd still misses after a completed scan, if all of it are txgs the
+ * scan couldn't repair: whether oldvd may still supply them.
+ */
+typedef enum vdev_unrepaired {
+	VDEV_UNREPAIRED_NONE,		/* newvd misses other txgs, or none */
+	VDEV_UNREPAIRED_LOST,		/* oldvd can't supply them either */
+	VDEV_UNREPAIRED_OLD_MAY_HAVE,	/* oldvd may hold them */
+} vdev_unrepaired_t;
+
+static vdev_unrepaired_t
+vdev_dtl_unrepaired(vdev_t *newvd, vdev_t *oldvd)
+{
+	vdev_dtl_covered_arg_t vdcv = {
+		.vdcv_rt = oldvd->vdev_dtl[DTL_MISSING],
+		.vdcv_covered = B_TRUE,
+	};
+
+	if (!newvd->vdev_ops->vdev_op_leaf || !vdev_readable(newvd))
+		return (VDEV_UNREPAIRED_NONE);
+
+	mutex_enter(&newvd->vdev_dtl_lock);
+	if (!newvd->vdev_dtl_unrepaired ||
+	    zfs_range_tree_is_empty(newvd->vdev_dtl[DTL_MISSING])) {
+		mutex_exit(&newvd->vdev_dtl_lock);
+		return (VDEV_UNREPAIRED_NONE);
+	}
+	if (!vdev_is_absent(oldvd)) {
+		mutex_enter(&oldvd->vdev_dtl_lock);
+		zfs_range_tree_walk(newvd->vdev_dtl[DTL_MISSING],
+		    vdev_dtl_covered_cb, &vdcv);
+		mutex_exit(&oldvd->vdev_dtl_lock);
+	}
+	mutex_exit(&newvd->vdev_dtl_lock);
+
+	return (vdcv.vdcv_covered ? VDEV_UNREPAIRED_LOST :
+	    VDEV_UNREPAIRED_OLD_MAY_HAVE);
+}
+
+/*
+ * Determine whether all that newvd still misses are txgs that a completed
+ * scan couldn't repair, and oldvd can't supply them either: it is gone
+ * (vdev_is_absent()), or it misses them as well.  Keeping oldvd attached
+ * then protects nothing, so a replacement or a spare can complete as if
+ * newvd's DTL was empty.  The scan has already recorded the blocks as
+ * permanent errors.  A faulted or offline oldvd that may hold them stays,
+ * so that "zpool clear" or "zpool online" can let a resilver copy them;
+ * "zpool detach" of it is the way to give them up.
+ */
+boolean_t
+vdev_dtl_unrepaired_only(vdev_t *newvd, vdev_t *oldvd)
+{
+	ASSERT(spa_config_held(newvd->vdev_spa, SCL_STATE_ALL, RW_WRITER) ==
+	    SCL_STATE_ALL);
+
+	return (vdev_dtl_unrepaired(newvd, oldvd) == VDEV_UNREPAIRED_LOST);
+}
+
+/*
+ * Determine whether vd is the old device of a replacement that can't
+ * complete because only vd may still hold some of the data its replacement
+ * is missing (see vdev_dtl_unrepaired_only()).  Reported by "zpool status".
+ */
+boolean_t
+vdev_replace_held(vdev_t *vd)
+{
+	vdev_t *pvd = vd->vdev_parent;
+
+	if (pvd == NULL || pvd->vdev_ops != &vdev_replacing_ops ||
+	    pvd->vdev_child[0] != vd)
+		return (B_FALSE);
+
+	return (vdev_dtl_unrepaired(pvd->vdev_child[pvd->vdev_children - 1],
+	    vd) == VDEV_UNREPAIRED_OLD_MAY_HAVE);
 }
 
 /*
@@ -5962,6 +6132,16 @@ vdev_set_state(vdev_t *vd, boolean_t isopen, vdev_state_t state, vdev_aux_t aux)
 		/* filter out state change due to initial vdev_open */
 		if (save_state > VDEV_STATE_CLOSED)
 			zfs_post_state_change(spa, vd, save_state);
+
+		/*
+		 * A replacement or spare that kept its old device for blocks
+		 * no device could supply can complete once that device is
+		 * gone (vdev_dtl_unrepaired_only()).
+		 */
+		if (vd->vdev_parent != NULL && vdev_is_absent(vd) &&
+		    (vd->vdev_parent->vdev_ops == &vdev_replacing_ops ||
+		    vd->vdev_parent->vdev_ops == &vdev_spare_ops))
+			spa_async_request(spa, SPA_ASYNC_RESILVER_DONE);
 	}
 
 	if (!isopen && vd->vdev_parent)
@@ -6125,17 +6305,19 @@ vdev_defer_resilver(vdev_t *vd)
 /*
  * Clears the resilver deferred flag on all leaf devs under vd. Returns
  * B_TRUE if we have devices that need to be resilvered and are available to
- * accept resilver I/Os.
+ * accept resilver I/Os; with deferred_only, only counting devices whose
+ * resilver was deferred.
  */
 boolean_t
-vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx)
+vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx, boolean_t deferred_only)
 {
 	boolean_t resilver_needed = B_FALSE;
 	spa_t *spa = vd->vdev_spa;
 
 	for (int c = 0; c < vd->vdev_children; c++) {
 		vdev_t *cvd = vd->vdev_child[c];
-		resilver_needed |= vdev_clear_resilver_deferred(cvd, tx);
+		resilver_needed |= vdev_clear_resilver_deferred(cvd, tx,
+		    deferred_only);
 	}
 
 	if (vd == spa->spa_root_vdev &&
@@ -6150,10 +6332,11 @@ vdev_clear_resilver_deferred(vdev_t *vd, dmu_tx_t *tx)
 	    !vd->vdev_ops->vdev_op_leaf)
 		return (resilver_needed);
 
+	boolean_t deferred = vd->vdev_resilver_deferred;
 	vd->vdev_resilver_deferred = B_FALSE;
 
-	return (!vdev_is_dead(vd) && !vd->vdev_offline &&
-	    vdev_resilver_needed(vd, NULL, NULL));
+	return ((deferred || !deferred_only) && !vdev_is_dead(vd) &&
+	    !vd->vdev_offline && vdev_resilver_needed(vd, NULL, NULL));
 }
 
 boolean_t
