@@ -1764,6 +1764,8 @@ zvol_os_create_minor(const char *name)
 	}
 	if (replayed_zil)
 		zil_close(zv->zv_zilog);
+	else
+		zil_close_unused(zv->zv_zilog);
 	zv->zv_zilog = NULL;
 
 	/*

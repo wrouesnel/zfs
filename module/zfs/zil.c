@@ -4516,6 +4516,24 @@ zil_open(objset_t *os, zil_get_data_t *get_data, zil_sums_t *zil_sums)
 }
 
 /*
+ * Close an intent log that nothing has been logged to since zil_open(), such
+ * as one opened only to find that there is nothing to replay.  There is
+ * nothing to commit or wait for, so this skips zil_close()'s commit, which
+ * would assign a commit itx and wait for its txg to sync.  The objset may
+ * stay cached after it is disowned, so the next zil_open() must find the
+ * log closed.
+ */
+void
+zil_close_unused(zilog_t *zilog)
+{
+	ASSERT3P(zilog->zl_get_data, !=, NULL);
+	ASSERT0P(zilog->zl_last_lwb_opened);
+	ASSERT(list_is_empty(&zilog->zl_lwb_list));
+
+	zilog->zl_get_data = NULL;
+}
+
+/*
  * Close an intent log.
  */
 void

@@ -634,6 +634,7 @@ extern void	zil_free(zilog_t *zilog);
 extern zilog_t	*zil_open(objset_t *os, zil_get_data_t *get_data,
     zil_sums_t *zil_sums);
 extern void	zil_close(zilog_t *zilog);
+extern void	zil_close_unused(zilog_t *zilog);
 
 extern boolean_t zil_replay(objset_t *os, void *arg,
     zil_replay_func_t *const replay_func[TX_MAX_TYPE]);
