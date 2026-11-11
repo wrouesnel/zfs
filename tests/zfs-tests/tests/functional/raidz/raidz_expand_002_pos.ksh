@@ -85,16 +85,27 @@ for disk in ${disks[$(($nparity+2))..$devs]}; do
 
 	log_must zpool attach -w $pool ${raid}-0 $disk
 
-	# Wait some time for pool size increase
-	sleep 5
-
 	# Confirm that disk was attached to the pool
 	log_must zpool get -H path $TESTPOOL $disk
 
+	#
+	# zpool attach -w returns when the reflow has finished.  The new
+	# space comes after that: the expansion thread reopens the vdev with
+	# its new width, and an async config update adds the metaslabs, which
+	# takes a few txgs.  On a slow system that can take longer than any
+	# fixed sleep, so wait for the pool size to grow.
+	#
+	typeset -i waited=0
 	typeset expand_size=$(get_pool_prop size $pool)
+	while [[ "$expand_size" -le "$pool_size" ]] && ((waited < 300)); do
+		sleep 1
+		((waited += 1))
+		expand_size=$(get_pool_prop size $pool)
+	done
 	if [[ "$expand_size" -le "$pool_size" ]]; then
-		log_fail "pool $pool not expanded"
+		log_fail "pool $pool not expanded after ${waited}s"
 	fi
+	log_note "pool $pool expanded after ${waited}s"
 
 	is_pool_scrubbing $pool && wait_scrubbed $pool
 	verify_pool $pool
