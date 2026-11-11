@@ -39,7 +39,7 @@ function usage
 
 $0 [-hlM] [-c <dump directory>] [-f <vdev directory>]
   [-m <max core dumps>] [-s <vdev size>] [-S <seed>] [-t <timeout>]
-  [-I <max iterations>] [-- [extra ztest parameters]]
+  [-I <max iterations>] [-k <seconds>] [-- [extra ztest parameters]]
 
   This script runs ztest repeatedly with randomized arguments.
   If a crash is encountered, the ztest logs, any associated
@@ -61,6 +61,11 @@ $0 [-hlM] [-c <dump directory>] [-f <vdev directory>]
     -t  Total time to loop for, in seconds. If not provided,
         zloop runs forever.
     -I  Max number of iterations to loop before exiting.
+    -k  Treat a ztest run that is still running after this many
+        seconds as hung: print the backtraces of all its threads
+        (and of any zdb it started), kill it and keep its logs and
+        vdev files like a crash. If not provided, a run is never
+        killed.
 
 EOF
 }
@@ -121,6 +126,55 @@ function core_prog
 		prog=$ZDB
 	fi
 	printf "%s" "$prog"
+}
+
+#
+# Runs in the background while ztest runs.  If ztest is still running
+# after hangtime seconds, print the backtraces of all its threads, and of
+# the processes it started (its child ztest and zdb), and kill them, so
+# that a hang is reported like a crash rather than running forever.
+#
+function watchdog # zloop-pid
+{
+	typeset zloop=$1
+	typeset deadline=$(($(date +%s) + hangtime))
+	typeset pids=""
+	typeset all=""
+	typeset next p
+
+	while [[ $(date +%s) -le $deadline ]]; do
+		kill -0 "$zloop" 2>/dev/null || return
+		sleep 1
+	done
+	# zloop's other child is this watchdog
+	for p in $(pgrep -P "$zloop"); do
+		[[ $p -ne $BASHPID ]] &&
+		    [[ "$(ps -o args= -p "$p")" == *ztest* ]] &&
+		    pids="$pids $p"
+	done
+	[[ -n $pids ]] || return
+
+	echo "*** ztest still running after ${hangtime}s, killing it" | \
+	    tee -a ztest.history ztest.out
+
+	while [[ -n $pids ]]; do
+		all="$all $pids"
+		next=""
+		for p in $pids; do
+			next="$next $(pgrep -d " " -P "$p")"
+		done
+		read -r pids <<<"$next"
+	done
+
+	for p in $all; do
+		echo "*** hung process $p: $(ps -o args= -p "$p")"
+		$GDB --batch --quiet -p "$p" \
+		    -ex "set print thread-events off" \
+		    -ex "info threads" \
+		    -ex "thread apply all bt" 2>&1 | grep -v "New LWP"
+	done >>ztest.out
+	# shellcheck disable=SC2086
+	kill -9 $all 2>/dev/null
 }
 
 function store_core
@@ -196,17 +250,19 @@ coredir=$DEFAULTCOREDIR
 basedir=$DEFAULTWORKDIR
 rundir="zloop-run"
 timeout=0
+hangtime=0
 size="512m"
 coremax=0
 symlink=0
 iterations=0
 multihost=0
 seed=$RANDOM
-while getopts ":ht:m:I:s:S:c:f:lM" opt; do
+while getopts ":ht:m:I:k:s:S:c:f:lM" opt; do
 	case $opt in
 		t ) [[ $OPTARG -gt 0 ]] && timeout=$OPTARG ;;
 		m ) [[ $OPTARG -gt 0 ]] && coremax=$OPTARG ;;
 		I ) [[ -n $OPTARG ]] && iterations=$OPTARG ;;
+		k ) [[ $OPTARG -gt 0 ]] && hangtime=$OPTARG ;;
 		s ) [[ -n $OPTARG ]] && size=$OPTARG ;;
 		S ) [[ -n $OPTARG ]] && seed=$OPTARG ;;
 		c ) [[ -n $OPTARG ]] && coredir=$OPTARG ;;
@@ -380,8 +436,16 @@ while (( timeout == 0 )) || (( curtime <= (starttime + timeout) )); do
 
 	cmd="$ZTEST $zopt $*"
 	echo "$(date '+%m/%d %T') $cmd" | tee -a ztest.history ztest.out
+	if [[ $hangtime -gt 0 ]]; then
+		watchdog $$ &
+		wdpid=$!
+	fi
 	$cmd >>ztest.out 2>&1
 	ztrc=$?
+	if [[ $hangtime -gt 0 ]]; then
+		kill "$wdpid" 2>/dev/null
+		wait "$wdpid" 2>/dev/null
+	fi
 	grep -E '===|WARNING' ztest.out >>ztest.history
 
 	store_core
