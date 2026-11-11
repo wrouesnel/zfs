@@ -3524,6 +3524,22 @@ zfs_ioc_pool_set_props(zfs_cmd_t *zc)
 
 	error = spa_prop_set(spa, props);
 
+	/*
+	 * The comment and compatibility properties are kept in the pool
+	 * config, which the txg that set them has already updated.  Write
+	 * the cache file now, so it matches the pool when we return,
+	 * instead of leaving it to the async config update, which only
+	 * writes it after another txg has synced.
+	 */
+	if (error == 0 &&
+	    (nvlist_exists(props, zpool_prop_to_name(ZPOOL_PROP_COMMENT)) ||
+	    nvlist_exists(props,
+	    zpool_prop_to_name(ZPOOL_PROP_COMPATIBILITY)))) {
+		spa_namespace_enter(FTAG);
+		spa_write_cachefile(spa, B_FALSE, B_FALSE, B_FALSE);
+		spa_namespace_exit(FTAG);
+	}
+
 	nvlist_free(props);
 	spa_close(spa, FTAG);
 
