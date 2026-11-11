@@ -28,8 +28,9 @@
 #
 # STRATEGY:
 #	1. Create a pool
-#	2. Import the pool with an injected delay in the background
+#	2. Export the pool with an injected delay in the background
 #	3. Execute some admin commands against the pool
+#	4. Wait for all of them, and check that the export succeeded
 #
 
 verify_runnable "global"
@@ -38,6 +39,7 @@ DEVICE_DIR=$TEST_BASE_DIR/dev_export-test
 
 function cleanup
 {
+	wait
 	zinject -c all
 	poolexists $TESTPOOL1 && destroy_pool $TESTPOOL1
 	[[ -d $DEVICE_DIR ]] && log_must rm -rf $DEVICE_DIR
@@ -55,9 +57,19 @@ log_must zpool create -f $TESTPOOL1 mirror ${DEVICE_DIR}/disk0 ${DEVICE_DIR}/dis
 log_must zinject -P export -s 10 $TESTPOOL1
 
 log_must_busy zpool export $TESTPOOL1 &
+export_pid=$!
 
 zpool set comment=hello $TESTPOOL1
 zpool reguid $TESTPOOL1 &
 zpool split $TESTPOOL1 &
+
+#
+# Wait for the export and the admin commands before the test ends.
+# log_must_busy retries a busy export for up to 31 seconds; a retry that
+# outlives this test would export the next test's $TESTPOOL1.
+#
+wait $export_pid || log_fail "zpool export $TESTPOOL1 did not succeed"
+wait
+log_mustnot poolexists $TESTPOOL1
 
 log_pass "admin commands cannot race a pool export"
