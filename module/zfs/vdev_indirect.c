@@ -225,7 +225,8 @@ unsigned long zfs_reconstruct_indirect_damage_fraction = 0;
  * need to read all copies of the data (e.g. for scrub or reconstruction).
  * For plain (non-mirror) top-level vdevs (i.e. is_vdev is not a mirror),
  * ic_vdev is the same as is_vdev.  However, for mirror top-level vdevs,
- * ic_vdev is a child of the mirror.
+ * ic_vdev is a leaf under the mirror, also under any "replacing" or
+ * "spare" vdev in it.
  */
 typedef struct indirect_child {
 	abd_t *ic_data;
@@ -1187,6 +1188,54 @@ vdev_indirect_child_io_done(zio_t *zio)
 }
 
 /*
+ * Return B_TRUE if the copies of the data under vd are the copies of its
+ * children: a mirror, or the "replacing" and "spare" vdevs, which use the
+ * mirror ops.
+ */
+static boolean_t
+vdev_indirect_has_copies(vdev_t *vd)
+{
+	return (vd->vdev_ops == &vdev_mirror_ops ||
+	    vd->vdev_ops == &vdev_replacing_ops ||
+	    vd->vdev_ops == &vdev_spare_ops);
+}
+
+/*
+ * Count the copies of the data under vd, down to the leaves of any
+ * mirror, replacing or spare vdevs.
+ */
+static int
+vdev_indirect_count_copies(vdev_t *vd)
+{
+	if (!vdev_indirect_has_copies(vd))
+		return (1);
+
+	int n = 0;
+	for (int c = 0; c < vd->vdev_children; c++)
+		n += vdev_indirect_count_copies(vd->vdev_child[c]);
+	return (n);
+}
+
+/*
+ * Fill is_child[] from *idx onwards with the vdevs that hold the copies
+ * counted by vdev_indirect_count_copies().
+ */
+static void
+vdev_indirect_add_copies(indirect_split_t *is, vdev_t *vd, int *idx)
+{
+	if (!vdev_indirect_has_copies(vd)) {
+		ASSERT3S(*idx, <, is->is_children);
+		is->is_child[*idx].ic_vdev = vd;
+		list_link_init(&is->is_child[*idx].ic_node);
+		(*idx)++;
+		return;
+	}
+
+	for (int c = 0; c < vd->vdev_children; c++)
+		vdev_indirect_add_copies(is, vd->vdev_child[c], idx);
+}
+
+/*
  * This is a callback for vdev_indirect_remap() which allocates an
  * indirect_split_t for each split segment and adds it to iv_splits.
  */
@@ -1202,9 +1251,19 @@ vdev_indirect_gather_splits(uint64_t split_offset, vdev_t *vd, uint64_t offset,
 	if (vd->vdev_ops == &vdev_indirect_ops)
 		return;
 
-	int n = 1;
-	if (vd->vdev_ops == &vdev_mirror_ops)
-		n = vd->vdev_children;
+	/*
+	 * Each leaf under a mirror, and under a "replacing" or "spare"
+	 * vdev, is a separate copy of the data.  The old and the new
+	 * device of a replacing or spare vdev can hold different data, for
+	 * example while the scrub that follows a sequential rebuild
+	 * verifies what it copied, or when one side has silent damage.
+	 * Reading such a vdev as a whole returns one of its children's
+	 * data, or a checksum error when they differ, so a good copy on
+	 * the other child would never be tried.  A copy that is missing
+	 * the data is marked by its DTL in vdev_indirect_read_all(), and
+	 * every combination is verified against the block's checksum.
+	 */
+	int n = vdev_indirect_count_copies(vd);
 
 	indirect_split_t *is =
 	    kmem_zalloc(offsetof(indirect_split_t, is_child[n]), KM_SLEEP);
@@ -1217,20 +1276,9 @@ vdev_indirect_gather_splits(uint64_t split_offset, vdev_t *vd, uint64_t offset,
 	list_create(&is->is_unique_child, sizeof (indirect_child_t),
 	    offsetof(indirect_child_t, ic_node));
 
-	/*
-	 * Note that we only consider multiple copies of the data for
-	 * *mirror* vdevs.  We don't for "replacing" or "spare" vdevs, even
-	 * though they use the same ops as mirror, because there's only one
-	 * "good" copy under the replacing/spare.
-	 */
-	if (vd->vdev_ops == &vdev_mirror_ops) {
-		for (int i = 0; i < n; i++) {
-			is->is_child[i].ic_vdev = vd->vdev_child[i];
-			list_link_init(&is->is_child[i].ic_node);
-		}
-	} else {
-		is->is_child[0].ic_vdev = vd;
-	}
+	int idx = 0;
+	vdev_indirect_add_copies(is, vd, &idx);
+	ASSERT3S(idx, ==, n);
 
 	list_insert_tail(&iv->iv_splits, is);
 }
