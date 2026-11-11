@@ -79,8 +79,12 @@ arcstat_quiescence_noecho l2_feeds
 typeset l2_rebuild_log_blk_start=$(kstat arcstats.l2_rebuild_log_blks)
 typeset l2_dh_log_blk=$(zdb -l $VDEV_CACHE | awk '/log_blk_count/ {print $2}')
 
+typeset l2_rebuild_lowmem_start=$(kstat arcstats.l2_rebuild_lowmem)
+typeset l2_rebuilds_start=$(l2arc_rebuilds_ended)
+wait_l2arc_rebuild_memory
 log_must zpool import -d $VDIR $TESTPOOL
 log_must zpool online $TESTPOOL $VDEV_CACHE
+wait_l2arc_rebuild $l2_rebuilds_start $l2_rebuild_lowmem_start
 arcstat_quiescence_noecho l2_size
 
 typeset l2_rebuild_log_blk_end=$(arcstat_quiescence_echo l2_rebuild_log_blks)
