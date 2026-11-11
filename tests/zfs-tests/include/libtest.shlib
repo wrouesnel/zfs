@@ -3474,14 +3474,60 @@ function zed_stop
 	fi
 
 	log_note "Stopping ZED"
+	typeset -i waited=0 timeout=${ZED_STOP_TIMEOUT:-30}
 	while true; do
 		zedpids=$(zed_check)
 		[ ! -n "$zedpids" ] && break
 
-		log_must kill $zedpids
+		#
+		# ZED exits between events, so it should be gone within a
+		# second or two.  If it ignores SIGTERM for $timeout seconds
+		# it is stuck: record what its threads and zedlets are doing,
+		# then SIGKILL it.  Otherwise every later ZED test fails with
+		# "ZED already running", is killed by the test timeout before
+		# its cleanup runs, and leaves its pools behind for the tests
+		# after it.  This returns success once ZED is gone, so that
+		# the rest of the caller's cleanup still runs.
+		#
+		if (( waited >= timeout )); then
+			log_note "ZED ignored SIGTERM for $timeout s: $zedpids"
+			zed_dump_hung $zedpids
+			kill -9 $zedpids 2>/dev/null
+			sleep 1
+			if [ -n "$(zed_check)" ]; then
+				log_note "ZED survived SIGKILL"
+				return 1
+			fi
+			break
+		fi
+
+		# ZED may exit between zed_check and kill; that is success.
+		kill $zedpids 2>/dev/null
 		sleep 1
+		(( waited += 1 ))
 	done
 	return 0
+}
+
+#
+# Log the state of every thread of the given ZED processes, the zedlets they
+# are running and the end of the ZED log.
+#
+function zed_dump_hung # pid...
+{
+	typeset pid t
+
+	for pid in "$@"; do
+		for t in /proc/$pid/task/*; do
+			echo "thread ${t##*/} $(< $t/comm):" \
+			    "state $(sed 's/.*) //' $t/stat | cut -d' ' -f1)" \
+			    "wchan $(< $t/wchan)" \
+			    "syscall $(cut -d' ' -f1-3 $t/syscall)"
+			cat $t/stack 2>/dev/null
+		done
+		ps -o pid,stat,etime,wchan:24,args --ppid $pid
+	done
+	[ -f $ZED_LOG ] && tail -n 40 $ZED_LOG
 }
 
 #
