@@ -60,10 +60,16 @@ function do_setup
 	log_must zfs set recordsize=512 $POOL
 }
 
+#
+# ZED's agents open the pool for a moment after each event (to fault or
+# degrade the vdev, and to look the pool up again after the resulting
+# statechange and config_sync events).  A destroy that overlaps one of
+# those opens fails with EBUSY, so retry it while ZED catches up.
+#
 function do_clean
 {
 	log_must zinject -c all
-	log_must zpool destroy $POOL
+	log_must_busy zpool destroy $POOL
 }
 
 function must_degrade
