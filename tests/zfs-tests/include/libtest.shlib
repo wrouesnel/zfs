@@ -3175,6 +3175,38 @@ function write_compressible
 	fi
 }
 
+#
+# Print how many times injection point handler $1 (from 'zinject -q -n') has
+# acted, from the INJECT column of 'zinject'.
+#
+function inject_point_count
+{
+	zinject | awk -v id="$1" '$1 == id && NF == 6 { print $6 }'
+}
+
+#
+# Wait up to $3 seconds (default 30) until injection point handler $1 has
+# acted at least $2 times (default 1).  For '-A pause', that many threads
+# have then reached the point and are held there.  'zinject -w' sleeps until
+# the next injection event, so this doesn't poll.
+#
+function wait_inject_point
+{
+	typeset id=$1
+	typeset -i want=${2:-1}
+	typeset -i deadline=$((SECONDS + ${3:-30}))
+	typeset state
+	typeset next
+
+	state=$(zinject -w 0) || return 1
+	while ((SECONDS < deadline)); do
+		(($(inject_point_count $id) >= want)) && return 0
+		next=$(zinject -w $state -W 1000)
+		[[ $next == +([0-9]) ]] && state=$next
+	done
+	(($(inject_point_count $id) >= want))
+}
+
 function get_objnum
 {
 	typeset pathname=$1
