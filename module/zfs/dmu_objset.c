@@ -476,6 +476,7 @@ dmu_objset_open_impl(spa_t *spa, dsl_dataset_t *ds, blkptr_t *bp,
 	}
 
 	os = kmem_zalloc(sizeof (objset_t), KM_SLEEP);
+	os->os_magic = OBJSET_MAGIC;
 	os->os_dsl_dataset = ds;
 	os->os_spa = spa;
 	os->os_rootbp = bp;
@@ -1005,6 +1006,7 @@ dmu_objset_evict(objset_t *os)
 	dmu_objset_evict_dbufs(os);
 
 	mutex_enter(&os->os_lock);
+	os->os_magic = 0;
 	spa_evicting_os_register(os->os_spa, os);
 	if (list_is_empty(&os->os_dnodes)) {
 		mutex_exit(&os->os_lock);
