@@ -348,6 +348,32 @@ unsigned long raidz_expand_max_reflow_bytes = 0;
 uint_t raidz_expand_pause_point = 0;
 
 /*
+ * For testing only: order a scrub repair against the reflow.  When non-zero,
+ * the reflow ends a copy chunk at this offset and stops there.  A scrub read
+ * of the block that spans the offset then sets up its map and takes the
+ * expansion rangelock, lets the reflow go on (copying up to the end of that
+ * block), and waits for the copy to finish, for at most
+ * raidz_expand_repair_race_wait seconds, before it reads the block and
+ * repairs it.  The tunable then resets itself to 0.  (accessed by ZTS)
+ */
+static unsigned long raidz_expand_repair_race_offset = 0;
+static volatile boolean_t raidz_expand_repair_race_held = B_FALSE;
+static volatile uint64_t raidz_expand_repair_race_end = 0;
+static const int raidz_expand_repair_race_wait = 10;
+
+/*
+ * Should the reflow stop at raidz_expand_repair_race_offset?
+ */
+static boolean_t
+raidz_expand_repair_race_stop(vdev_raidz_expand_t *vre)
+{
+	uint64_t race = raidz_expand_repair_race_offset;
+
+	return (race != 0 && vre->vre_offset >= race &&
+	    !raidz_expand_repair_race_held);
+}
+
+/*
  * This represents the duration for a slow drive read sit out.
  */
 static unsigned long vdev_read_sit_out_secs = 600;
@@ -2810,6 +2836,57 @@ vdev_raidz_io_start_read(zio_t *zio, raidz_map_t *rm)
  *      vdevs have had errors, then create zio read operations to the parity
  *      columns' VDevs as well.
  */
+/*
+ * For testing: hold the scrub read of the block that spans
+ * raidz_expand_repair_race_offset, once it has its map and rangelock, until
+ * the reflow has copied the rest of the block.  If the rangelock makes the
+ * reflow wait for this read, give up after raidz_expand_repair_race_wait
+ * seconds.
+ */
+static void
+vdev_raidz_repair_race_hold(zio_t *zio, uint64_t logical_width)
+{
+	uint64_t race = raidz_expand_repair_race_offset;
+	vdev_t *vd = zio->io_vd;
+	vdev_raidz_t *vdrz = vd->vdev_tsd;
+	vdev_raidz_expand_t *vre = &vdrz->vn_vre;
+
+	if (race == 0 || zio->io_type != ZIO_TYPE_READ ||
+	    !(zio->io_flags & ZIO_FLAG_SCRUB))
+		return;
+
+	uint64_t end = zio->io_offset +
+	    vdev_raidz_psize_to_asize_width(vd, zio->io_size, logical_width);
+	if (race <= zio->io_offset || race >= end)
+		return;
+
+	zfs_dbgmsg("raidz_expand_repair_race_offset: holding the read of "
+	    "%llu-%llu", (u_longlong_t)zio->io_offset, (u_longlong_t)end);
+	raidz_expand_repair_race_end = end;
+	raidz_expand_repair_race_held = B_TRUE;
+	hrtime_t deadline = gethrtime() +
+	    SEC2NSEC(raidz_expand_repair_race_wait);
+	/*
+	 * The reflow records its new offset before it counts the chunk as
+	 * outstanding, so wait for the copy to be issued and then to finish.
+	 */
+	boolean_t issued = B_FALSE;
+	while (gethrtime() < deadline) {
+		boolean_t past = (vre->vre_offset != UINT64_MAX &&
+		    vre->vre_offset >= end);
+		if (past && vre->vre_outstanding_bytes != 0)
+			issued = B_TRUE;
+		else if (issued)
+			break;
+		delay(1);
+	}
+	zfs_dbgmsg("raidz_expand_repair_race_offset: released the read of "
+	    "%llu-%llu, reflow offset %llu", (u_longlong_t)zio->io_offset,
+	    (u_longlong_t)end, (u_longlong_t)vre->vre_offset);
+	raidz_expand_repair_race_offset = 0;
+	raidz_expand_repair_race_held = B_FALSE;
+}
+
 static void
 vdev_raidz_io_start(zio_t *zio)
 {
@@ -2897,6 +2974,8 @@ vdev_raidz_io_start(zio_t *zio)
 		    logical_width, vdrz->vd_nparity,
 		    synced_offset, next_offset, use_scratch);
 		rm->rm_lr = lr;
+		if (lr != NULL)
+			vdev_raidz_repair_race_hold(zio, logical_width);
 	} else {
 		rm = vdev_raidz_map_alloc(zio,
 		    tvd->vdev_ashift, logical_width, vdrz->vd_nparity);
@@ -4633,6 +4712,21 @@ raidz_reflow_impl(vdev_t *vd, vdev_raidz_expand_t *vre, zfs_range_tree_t *rt,
 	uint_t blocks = MIN(size >> ashift, next_overwrite_blkid - blkid);
 	size = (uint64_t)blocks << ashift;
 
+	/* For testing: end this chunk at raidz_expand_repair_race_offset. */
+	uint64_t race = P2ALIGN_TYPED(raidz_expand_repair_race_offset,
+	    1ULL << ashift, uint64_t);
+	if (race > offset && race < offset + size) {
+		blocks = (race - offset) >> ashift;
+		size = (uint64_t)blocks << ashift;
+	}
+	/* ... and, once the scrub read there is held, at the block's end. */
+	uint64_t race_end = raidz_expand_repair_race_end;
+	if (raidz_expand_repair_race_held &&
+	    race_end > offset && race_end < offset + size) {
+		blocks = (race_end - offset) >> ashift;
+		size = (uint64_t)blocks << ashift;
+	}
+
 	zfs_range_tree_remove(rt, offset, size);
 
 	uint_t reads = MIN(blocks, old_children);
@@ -5278,6 +5372,25 @@ spa_raidz_expand_thread(void *arg, zthr_t *zthr)
 				delay(hz);
 			}
 
+			/*
+			 * For testing: stop at raidz_expand_repair_race_offset
+			 * until a scrub read there releases us, and copy
+			 * nothing more if we are cancelled meanwhile.
+			 */
+			if (raidz_expand_repair_race_stop(vre)) {
+				zfs_dbgmsg("raidz_expand_repair_race_offset: "
+				    "reflow stopped at %llu",
+				    (u_longlong_t)vre->vre_offset);
+				while (raidz_expand_repair_race_stop(vre) &&
+				    !zthr_iscancelled(zthr))
+					delay(MAX(hz / 10, 1));
+				if (zthr_iscancelled(zthr)) {
+					spa_config_enter(spa, SCL_CONFIG, FTAG,
+					    RW_READER);
+					break;
+				}
+			}
+
 			mutex_enter(&vre->vre_lock);
 			while (vre->vre_outstanding_bytes >
 			    raidz_expand_max_copy_bytes) {
@@ -5829,6 +5942,8 @@ vdev_ops_t vdev_raidz_ops = {
 
 ZFS_MODULE_PARAM(zfs_vdev, raidz_, expand_max_reflow_bytes, ULONG, ZMOD_RW,
 	"For testing, pause RAIDZ expansion after reflowing this many bytes");
+ZFS_MODULE_PARAM(zfs_vdev, raidz_, expand_repair_race_offset, ULONG, ZMOD_RW,
+	"For testing, order a scrub repair against the RAIDZ expansion reflow");
 ZFS_MODULE_PARAM(zfs_vdev, raidz_, expand_max_copy_bytes, ULONG, ZMOD_RW,
 	"Max amount of concurrent i/o for RAIDZ expansion");
 ZFS_MODULE_PARAM(zfs_vdev, raidz_, io_aggregate_rows, ULONG, ZMOD_RW,

@@ -600,6 +600,14 @@ This limits how much I/O can be outstanding at once.
 .It Sy raidz_expand_max_reflow_bytes Ns = Ns Sy 0 Pq ulong
 For testing, pause RAID-Z expansion when reflow amount reaches this value.
 .
+.It Sy raidz_expand_repair_race_offset Ns = Ns Sy 0 Pq ulong
+For testing, order a scrub repair against the RAID-Z expansion reflow.
+When non-zero, the reflow stops at this offset of the RAID-Z vdev.
+A scrub read of the block spanning the offset then lets the reflow copy the
+rest of that block, and waits up to 10 seconds for the copy to finish before
+it reads and repairs the block.
+The tunable then resets itself to 0.
+.
 .It Sy raidz_io_aggregate_rows Ns = Ns Sy 4 Pq ulong
 For expanded RAID-Z, aggregate reads that have more rows than this.
 .
