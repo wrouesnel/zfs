@@ -24,8 +24,8 @@
 .Sh DESCRIPTION
 .Nm
 creates artificial problems in a ZFS pool by simulating data corruption
-or device failures, or by forcing a one-shot error return from a tagged
-code path
+or device failures, or by forcing an error return from, delaying, or pausing
+a named point in the code
 .Pq Fl n .
 This program is dangerous.
 .
@@ -203,14 +203,45 @@ Force an error into the pool at a raw bookmark
 .
 .It Xo
 .Nm zinject
-.Fl n Ar error-point
-.Op Fl e Ar errno
+.Fl n Ar point Ns Oo @ Ns Ar caller Oc
+.Oo Fl e Ar errno Ns | Ns Fl D Ar msecs Ns | Ns Fl A Sy pause Oc
+.Op Fl f Ar frequency
 .Ar pool
 .Xc
-Force a one-shot error return at a function injection tag.
-Default errno is
-.Sy io .
-The handler is cleared when it fires.
+Act at the injection point named
+.Ar point
+in
+.Ar pool ,
+whenever any thread reaches it, or with
+.No @ Ns Ar caller ,
+only when it is reached from the function
+.Ar caller .
+.Bl -tag -width "-A pause"
+.It Fl e Ar errno
+Return
+.Ar errno
+.Pq default Sy io
+once, then clear the handler, so that the next attempt succeeds.
+.It Fl D Ar msecs
+Delay each thread that reaches the point by
+.Ar msecs
+milliseconds.
+.It Fl A Sy pause
+Block each thread that reaches the point until the handler is cleared with
+.Fl c .
+Use
+.Fl w
+to wait until a thread has reached it.
+.El
+.Pp
+Every file system operation reaches the point
+.Sy zfs_enter
+just before it enters the file system, with its function name as the caller,
+so for instance
+.Dl # Nm zinject Fl n Sy zfs_enter@zpl_fadvise Fl A Sy pause Ar pool
+holds
+.Xr posix_fadvise 2
+calls on Linux until the handler is cleared.
 .
 .It Xo
 .Nm zinject

@@ -40,6 +40,7 @@
 #include <sys/dmu_objset.h>
 #include <sys/dsl_dataset.h>
 #include <sys/fs/zfs.h>
+#include <sys/zfs_delay.h>
 
 /*
  * Number of zinject handlers registered on the system, incremented and
@@ -191,12 +192,96 @@ done:
 }
 
 /*
- * Inject a one-time error into the middle of a function.
+ * Number of injection point (ZINJECT_FUNC_FAULT) handlers registered.  Hot
+ * paths that carry an injection point, such as zfs_enter(), test this
+ * rather than zio_injection_enabled, so that they cost nothing while other
+ * kinds of injection are active.
  */
-int
-zio_handle_func_injection(spa_t *spa, const char *tag, int *error)
+uint32_t zio_inject_points_enabled = 0;
+
+/*
+ * Does the injection point name in a record match this point?  A record
+ * names either the point alone ("zfs_enter"), which matches every hit, or
+ * the point and the function it was reached from ("zfs_enter@zpl_fadvise"),
+ * which matches only hits from that caller.
+ */
+static boolean_t
+zio_inject_point_match(const char *rec, const char *point, const char *caller)
+{
+	size_t len = strlen(point);
+
+	if (strncmp(rec, point, len) != 0)
+		return (B_FALSE);
+	if (rec[len] == '\0')
+		return (B_TRUE);
+	return (rec[len] == '@' && caller != NULL &&
+	    strcmp(&rec[len + 1], caller) == 0);
+}
+
+static boolean_t
+zio_inject_handler_exists(int id)
 {
 	inject_handler_t *handler;
+
+	rw_enter(&inject_lock, RW_READER);
+	for (handler = list_head(&inject_handlers); handler != NULL;
+	    handler = list_next(&inject_handlers, handler)) {
+		if (handler->zi_id == id)
+			break;
+	}
+	rw_exit(&inject_lock);
+
+	return (handler != NULL);
+}
+
+/*
+ * Block the calling thread until handler id is removed ("zinject -c").
+ * Removing a handler is an injection event, so wait on the event cv and
+ * recheck after each event.  The timed wait is only a backstop.
+ */
+static void
+zio_inject_pause(int id)
+{
+	for (;;) {
+		mutex_enter(&inject_event_mtx);
+		uint64_t seen = inject_event_count;
+		mutex_exit(&inject_event_mtx);
+
+		if (!zio_inject_handler_exists(id))
+			return;
+
+		mutex_enter(&inject_event_mtx);
+		while (inject_event_count == seen) {
+			(void) cv_timedwait(&inject_event_cv,
+			    &inject_event_mtx, ddi_get_lbolt() + hz);
+		}
+		mutex_exit(&inject_event_mtx);
+	}
+}
+
+/*
+ * The injection point named point has been reached, from function caller
+ * (or NULL if the point doesn't record its caller), in pool spa.  If a
+ * ZINJECT_FUNC_FAULT handler matches, perform its action:
+ *
+ * ZINJECT_POINT_ERROR	set *error to the handler's error and return 1.
+ *			The handler is then removed, so the next hit
+ *			succeeds and the test can see a failure followed by
+ *			a success.
+ * ZINJECT_POINT_DELAY	sleep for the handler's delay, then return 0.
+ * ZINJECT_POINT_PAUSE	block until the handler is removed, then return 0.
+ *
+ * Every hit counts as an injection event, so "zinject -w" returns once a
+ * thread has reached the point; for a pause, the thread is then blocked.
+ */
+int
+zio_handle_point_injection(spa_t *spa, const char *point, const char *caller,
+    int *error)
+{
+	inject_handler_t *handler;
+	uint64_t action = 0;
+	hrtime_t delay = 0;
+	int id = 0;
 	int ret = 0;
 
 	rw_enter(&inject_lock, RW_WRITER);
@@ -206,29 +291,67 @@ zio_handle_func_injection(spa_t *spa, const char *tag, int *error)
 		if (handler->zi_record.zi_cmd != ZINJECT_FUNC_FAULT ||
 		    handler->zi_spa_name == NULL ||
 		    strcmp(spa_name(spa), handler->zi_spa_name) != 0 ||
-		    strcmp(tag, handler->zi_record.zi_func) != 0)
+		    !zio_inject_point_match(handler->zi_record.zi_func,
+		    point, caller))
 			continue;
 
-		*error = handler->zi_record.zi_error;
-		ret = 1;
+		handler->zi_record.zi_match_count++;
+		if (!freq_triggered(handler->zi_record.zi_freq))
+			continue;
+
+		handler->zi_record.zi_inject_count++;
+		action = handler->zi_record.zi_type;
+		delay = handler->zi_record.zi_timer;
+		id = handler->zi_id;
 		break;
 	}
-	if (handler != NULL)
+	if (handler != NULL && action == ZINJECT_POINT_ERROR) {
+		*error = handler->zi_record.zi_error;
+		ret = 1;
 		list_remove(&inject_handlers, handler);
+	}
 	rw_exit(&inject_lock);
 
-	if (handler != NULL) {
+	if (handler == NULL)
+		return (0);
+
+	zio_inject_notify();
+
+	switch (action) {
+	case ZINJECT_POINT_ERROR:
 		ASSERT3U(zio_injection_enabled, >, 0);
 		atomic_dec_32(&zio_injection_enabled);
+		ASSERT3U(zio_inject_points_enabled, >, 0);
+		atomic_dec_32(&zio_inject_points_enabled);
 
 		ASSERT0P(handler->zi_spa);
 		if (handler->zi_spa_name != NULL)
 			spa_strfree(handler->zi_spa_name);
-
 		kmem_free(handler, sizeof (inject_handler_t));
+		break;
+	case ZINJECT_POINT_DELAY:
+		zfs_sleep_until(gethrtime() + delay);
+		break;
+	case ZINJECT_POINT_PAUSE:
+		zfs_dbgmsg("zinject: handler %d paused at %s%s%s", id, point,
+		    caller != NULL ? "@" : "", caller != NULL ? caller : "");
+		zio_inject_pause(id);
+		zfs_dbgmsg("zinject: handler %d resumed at %s%s%s", id, point,
+		    caller != NULL ? "@" : "", caller != NULL ? caller : "");
+		break;
 	}
 
 	return (ret);
+}
+
+/*
+ * Inject a one-time error into the middle of a function, or delay or pause
+ * it there.  See zio_handle_point_injection().
+ */
+int
+zio_handle_func_injection(spa_t *spa, const char *tag, int *error)
+{
+	return (zio_handle_point_injection(spa, tag, NULL, error));
 }
 
 /*
@@ -1101,7 +1224,11 @@ zio_inject_fault(char *name, int flags, int *id, zinject_record_t *record)
 				return (SET_ERROR(ENOENT));
 			spa = NULL;
 		} else if (record->zi_cmd == ZINJECT_FUNC_FAULT) {
-			if (record->zi_func[0] == '\0')
+			if (record->zi_func[0] == '\0' ||
+			    record->zi_type > ZINJECT_POINT_PAUSE)
+				return (SET_ERROR(EINVAL));
+			if (record->zi_type == ZINJECT_POINT_DELAY &&
+			    record->zi_timer == 0)
 				return (SET_ERROR(EINVAL));
 			spa = NULL;
 		} else {
@@ -1148,6 +1275,8 @@ zio_inject_fault(char *name, int flags, int *id, zinject_record_t *record)
 		*id = handler->zi_id = inject_next_id++;
 		list_insert_tail(&inject_handlers, handler);
 		atomic_inc_32(&zio_injection_enabled);
+		if (handler->zi_record.zi_cmd == ZINJECT_FUNC_FAULT)
+			atomic_inc_32(&zio_inject_points_enabled);
 
 		zio_inject_notify();
 
@@ -1278,6 +1407,10 @@ zio_clear_fault(int id)
 	if (handler->zi_record.zi_cmd == ZINJECT_DELAY_IO) {
 		ASSERT3U(inject_delay_count, >, 0);
 		atomic_dec_32(&inject_delay_count);
+	}
+	if (handler->zi_record.zi_cmd == ZINJECT_FUNC_FAULT) {
+		ASSERT3U(zio_inject_points_enabled, >, 0);
+		atomic_dec_32(&zio_inject_points_enabled);
 	}
 
 	list_remove(&inject_handlers, handler);

@@ -727,6 +727,7 @@ extern void zio_fini(void);
  */
 struct zinject_record;
 extern uint32_t zio_injection_enabled;
+extern uint32_t zio_inject_points_enabled;
 extern int zio_inject_fault(char *name, int flags, int *id,
     struct zinject_record *record);
 extern int zio_inject_list_next(int *id, char *name, size_t buflen,
@@ -735,6 +736,8 @@ extern int zio_inject_wait(uint64_t *state, hrtime_t timeout);
 extern int zio_clear_fault(int id);
 extern int zio_handle_func_injection(spa_t *spa, const char *tag,
     int *error);
+extern int zio_handle_point_injection(spa_t *spa, const char *point,
+    const char *caller, int *error);
 extern void zio_handle_panic_injection(spa_t *spa, const char *tag,
     uint64_t type);
 extern int zio_handle_decrypt_injection(spa_t *spa, const zbookmark_phys_t *zb,
