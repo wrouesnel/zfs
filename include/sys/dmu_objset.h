@@ -42,6 +42,7 @@ struct dsl_dataset;
 struct dmu_tx;
 
 #define	OBJSET_PHYS_SIZE_V1	1024
+#define	OBJSET_MAGIC		0x0b75e7a11eULL	/* live objset_t */
 #define	OBJSET_PHYS_SIZE_V2	2048
 #define	OBJSET_PHYS_SIZE_V3	4096
 
@@ -91,6 +92,7 @@ typedef int (*dmu_objset_upgrade_cb_t)(objset_t *);
 
 #define	OBJSET_PROP_UNINITIALIZED	((uint64_t)-1)
 struct objset {
+	uint64_t os_magic;	/* OBJSET_MAGIC until it starts evicting */
 	/* Immutable: */
 	struct dsl_dataset *os_dsl_dataset;
 	spa_t *os_spa;

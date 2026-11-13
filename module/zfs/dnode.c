@@ -1442,6 +1442,13 @@ dnode_hold_impl(objset_t *os, uint64_t object, int flag, int slots,
 	dnode_phys_t *dn_block;
 	dnode_handle_t *dnh;
 
+	/*
+	 * The objset must be live: not evicting, freed, or reused.  A
+	 * caller that keeps an objset across a suspend of its file system
+	 * (e.g. by a receive) can get one that is any of those, and using it
+	 * doesn't always fault.
+	 */
+	ASSERT3U(os->os_magic, ==, OBJSET_MAGIC);
 	ASSERT(!(flag & DNODE_MUST_BE_ALLOCATED) || (slots == 0));
 	ASSERT(!(flag & DNODE_MUST_BE_FREE) || (slots > 0));
 	IMPLY(flag & DNODE_DRY_RUN, (tag == NULL) && (dnp == NULL));
