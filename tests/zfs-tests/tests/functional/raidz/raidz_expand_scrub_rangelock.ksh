@@ -85,7 +85,7 @@ function zero_from # disk start
 # The reflow offset recorded in the exported pool's uberblock.
 function reflow_offset
 {
-	zdb -e -p $TEST_BASE_DIR -u $TESTPOOL | \
+	zdb -e -p $TEST_BASE_DIR -u $guid | \
 	    awk '/raidz_reflow/ { sub("off=", "", $3); print $3 }'
 }
 
@@ -102,6 +102,11 @@ done
 log_must truncate -s 512M $TEST_BASE_DIR/dev-$devs
 
 log_must zpool create -f -o ashift=9 $TESTPOOL raidz$nparity ${disks[@]}
+#
+# Other tests can leave file vdevs labelled $TESTPOOL in $TEST_BASE_DIR, so
+# find this pool by its GUID when it is exported.
+#
+typeset guid=$(zpool get -Hp -o value guid $TESTPOOL)
 log_must zfs set primarycache=metadata $TESTPOOL
 log_must zfs create -o compression=off -o recordsize=128k $TESTPOOL/fs
 log_must fill_fs /$TESTPOOL/fs 1 256 102400 1 R
@@ -177,7 +182,7 @@ for (( i=0; i<$nparity; i=i+1 )); do
 	zero_from $TEST_BASE_DIR/dev-$i $start
 done
 
-log_must zpool import -d $TEST_BASE_DIR $TESTPOOL
+log_must zpool import -d $TEST_BASE_DIR $guid
 log_must zpool scrub -w $TESTPOOL
 log_must eval "zpool status -v $TESTPOOL"
 log_must check_pool_status $TESTPOOL "errors" "No known data errors"
@@ -196,7 +201,7 @@ log_must zpool export $TESTPOOL
 for (( i=0; i<$nparity; i=i+1 )); do
 	zero_from $TEST_BASE_DIR/dev-$i $label_size
 done
-log_must zpool import -d $TEST_BASE_DIR $TESTPOOL
+log_must zpool import -d $TEST_BASE_DIR $guid
 log_must zpool scrub -w $TESTPOOL
 log_must eval "zpool status -v $TESTPOOL"
 log_must check_pool_status $TESTPOOL "errors" "No known data errors"
