@@ -2241,9 +2241,11 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/replacement/replace_rebuild.ksh \
 	functional/replacement/replace_resilver.ksh \
 	functional/replacement/replace_resilver_sit_out.ksh \
+	functional/replacement/replace_write_errors.ksh \
 	functional/replacement/resilver_restart_001.ksh \
 	functional/replacement/resilver_restart_002.ksh \
 	functional/replacement/resilver_unreadable_detach.ksh \
+	functional/replacement/resilver_unreadable_removed.ksh \
 	functional/replacement/scrub_cancel.ksh \
 	functional/replacement/setup.ksh \
 	functional/reservation/cleanup.ksh \
