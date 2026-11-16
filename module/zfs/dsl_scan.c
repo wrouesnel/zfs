@@ -5136,13 +5136,22 @@ dsl_scan_scrub_done(zio_t *zio)
 	    !(zio->io_flags & ZIO_FLAG_RAW))) {
 		const blkptr_t *bp = zio->io_bp;
 
+		/*
+		 * A gang block's members, and the data an indirect (removed)
+		 * vdev was remapped to, can be on any top-level vdev, so the
+		 * DTLs of all leaves are checked for those.
+		 */
 		for (int d = 0; bp != NULL && d < BP_GET_NDVAS(bp); d++) {
 			vdev_t *vd = vdev_lookup_top(spa,
 			    DVA_GET_VDEV(&bp->blk_dva[d]));
-			if (vd != NULL) {
-				vdev_dtl_scrub_unrepaired(vd,
+			if (vd == NULL || BP_IS_GANG(bp) ||
+			    vd->vdev_ops == &vdev_indirect_ops) {
+				vdev_dtl_scrub_unrepaired(spa->spa_root_vdev,
 				    BP_GET_PHYSICAL_BIRTH(bp), 1);
+				break;
 			}
+			vdev_dtl_scrub_unrepaired(vd,
+			    BP_GET_PHYSICAL_BIRTH(bp), 1);
 		}
 
 		if (dsl_errorscrubbing(spa->spa_dsl_pool) &&
