@@ -22,7 +22,8 @@
 #	1. Create a raidz3 pool, fill it and attach a new disk with the
 #	   reflow paused after a tenth of the data.
 #	2. Three times: export the pool, zero the data area of three disks (the
-#	   most raidz3 can repair), import it, start a scrub and then move
+#	   most raidz3 can repair) except for the rows within 512K of the
+#	   reflow offset, import it, start a scrub and then move
 #	   the reflow pause point further on.  The reflow copies the damaged
 #	   rows while the scrub repairs them.  Verify the scrub found no data
 #	   errors and that the reflow is paused, not done.  At least one of
@@ -41,6 +42,14 @@ typeset -a disks
 function reflowed # pool
 {
 	zpool status -jp $1 | jq -r '.pools[].raidz_expand_stats.reflowed'
+}
+
+# The reflow offset recorded in the exported pool's uberblock.  By GUID, since
+# $TEST_BASE_DIR can hold other tests' vdevs with the same pool name.
+function reflow_offset # guid
+{
+	zdb -e -p $TEST_BASE_DIR -u $1 | \
+	    awk '/raidz_reflow/ { sub("off=", "", $3); print $3 }'
 }
 
 prefetch_disable=$(get_tunable PREFETCH_DISABLE)
@@ -73,6 +82,7 @@ log_must truncate -s 512M $TEST_BASE_DIR/dev-$devs
 
 log_must zpool create -f -o cachefile=none $TESTPOOL raidz$nparity ${disks[@]}
 log_must zfs set primarycache=metadata $TESTPOOL
+typeset guid=$(zpool get -Hp -o value guid $TESTPOOL)
 
 log_must zfs create $TESTPOOL/fs
 log_must fill_fs /$TESTPOOL/fs 1 512 102400 1 R
@@ -93,10 +103,34 @@ typeset -i overlapped=0
 for pause in 3 5 7; do
 	log_must zpool export $TESTPOOL
 
-	# Zero the data area (past the labels and boot area) of nparity disks.
+	#
+	# Zero the data area (past the labels and boot area) of nparity disks,
+	# except for the rows within 512K of the reflow offset.  A block that
+	# straddles the offset has its rows below it copied before this damage
+	# (a bad column on the same disk in every row) and its rows above it
+	# copied after it, if the reflow gets there before the scrub (a bad
+	# column on the same old child).  Reconstruction treats at most nparity
+	# children of either kind as failed for the whole block, and such a
+	# block needs each damaged disk counted once of each kind, so it would
+	# be lost.  That limit is not what this test is about.  The export
+	# leaves the offset inside a block when it stops a running reflow in
+	# the txg sync after a copy cut short by next_overwrite_blkid.  Rows
+	# below the offset are on the new width (sector s at child offset
+	# s / 7), rows above it on the old one (s / 6), in 512-byte sectors past
+	# the 4M boot area.
+	#
+	typeset -i at=$(reflow_offset $guid)
+	(( at > 0 )) || log_fail "no reflow offset in the exported pool"
+	typeset -i lo=$(( (at - 524288) / 512 / (devs + 1) ))
+	typeset -i hi=$(( ((at + 524288) / 512 + devs - 1) / devs ))
+	typeset -i end=$(( (dev_size_mb - 4) * 2048 ))
+	log_note "reflow offset $at: zeroing child sectors [0, $lo) and" \
+	    "[$hi, $end) of the data area"
 	for (( i=0; i<$nparity; i=i+1 )); do
 		log_must dd conv=notrunc if=/dev/zero of=$TEST_BASE_DIR/dev-$i \
-		    bs=1M seek=4 count=$(($dev_size_mb-4))
+		    bs=512 seek=8192 count=$lo
+		log_must dd conv=notrunc if=/dev/zero of=$TEST_BASE_DIR/dev-$i \
+		    bs=512 seek=$((8192 + hi)) count=$((end - hi))
 	done
 
 	# Import with the reflow still paused, start the scrub and only then
