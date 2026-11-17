@@ -39,6 +39,20 @@ for p in "${patches[@]}" ; do
 	patch -p1 < patch || true
 done
 
+# LU-20373 build: Compatibility updates for kernel v7.1
+#
+# Linux 7.1 made the d_u union in struct dentry anonymous, so d_alias is now
+# named directly (ZFS handles this in config/kernel-dentry-alias.m4).  EL 9.9
+# kernels (5.14.0-741 and later) carry the change.  The Lustre fix (change
+# 66662) does not apply to the 2.17.0 tag, so make its d_alias rename here.
+# This can be removed once a Lustre release includes that fix.
+dcache_h="/lib/modules/$(uname -r)/build/include/linux/dcache.h"
+if [ -f "$dcache_h" ] && ! grep -Eq '^\s*}\s*d_u;' "$dcache_h" ; then
+	echo "Kernel struct dentry has no d_u union, using d_alias directly"
+	sed -i 's/d_u\.d_alias/d_alias/' lustre/llite/dcache.c \
+	    lustre/llite/namei.c
+fi
+
 echo "Configure Lustre"
 ./autogen.sh
 # EL 9 needs '--disable-gss-keyring'
