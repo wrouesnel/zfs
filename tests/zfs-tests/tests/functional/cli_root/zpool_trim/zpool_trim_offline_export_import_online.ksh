@@ -51,9 +51,20 @@ new_progress="$(trim_progress $TESTPOOL $DISK1)"
 log_mustnot eval "trim_prog_line $TESTPOOL $DISK1 | grep suspended"
 
 log_must zpool online $TESTPOOL $DISK1
-new_progress="$(trim_progress $TESTPOOL $DISK1)"
-[[ "$new_progress" -ge "$progress" ]] || \
-    log_fail "Trimming lost progress after online"
+
+#
+# The online resumes the TRIM, and the resumed thread recalculates its
+# progress.  Sample the reported progress several times while that happens:
+# no sample may be missing or lower than the progress before the online.
+#
+for i in {1..20}; do
+	new_progress="$(trim_progress $TESTPOOL $DISK1)"
+	[[ -z "$new_progress" ]] && \
+	    log_fail "Trimming progress missing after online (sample $i)"
+	[[ "$new_progress" -ge "$progress" ]] || \
+	    log_fail "Trimming lost progress after online" \
+	    "(sample $i: $new_progress% < $progress%)"
+done
 
 log_pass "Trimming behaves as expected at each step of:" \
     "trim + offline + export + import + online"
