@@ -28,11 +28,15 @@ cd lustre-release
 #
 # LU-19539 osd-zfs: use osd_dmu_write() wrapper for xattrs
 # LU-19761 osd-zfs: Build against ZFS 2.4.0
-# LU-19249 build: Compatibility updates for kernel v6.16
+# LU-19249 build: Compatibility updates for kernel v6.16 (b2_17 backport)
+# LU-19459 build: Compatability updates for kernel v6.17
+# LU-19249 osd-zfs: support kernel v6.16
 #
 patches=('https://review.whamcloud.com/changes/fs%2Flustre-release~62101/revisions/2/patch?download'
 	'https://review.whamcloud.com/changes/fs%2Flustre-release~63267/revisions/9/patch?download'
-	'https://review.whamcloud.com/changes/fs%2Flustre-release~60619/revisions/13/patch?download')
+	'https://review.whamcloud.com/changes/fs%2Flustre-release~66224/revisions/4/patch?download'
+	'https://review.whamcloud.com/changes/fs%2Flustre-release~61767/revisions/14/patch?download'
+	'https://review.whamcloud.com/changes/fs%2Flustre-release~65188/revisions/2/patch?download')
 
 for p in "${patches[@]}" ; do
 	curl $p | base64 -d > patch
@@ -51,6 +55,33 @@ if [ -f "$dcache_h" ] && ! grep -Eq '^\s*}\s*d_u;' "$dcache_h" ; then
 	echo "Kernel struct dentry has no d_u union, using d_alias directly"
 	sed -i 's/d_u\.d_alias/d_alias/' lustre/llite/dcache.c \
 	    lustre/llite/namei.c
+fi
+
+# LU-19459 build: Compatability updates for kernel v6.17
+#
+# One hunk of change 61767, for ll_write_end() in lustre/llite/rw26.c, does
+# not apply to the 2.17.0 tag (the variable names differ), so make it here:
+# kernels with HAVE_WRITE_BEGIN_KIOCB, such as EL 10.3 (6.12.0-264 and later),
+# pass ->write_end() a kiocb instead of a file.
+sed -i '/^static int ll_write_end(struct file \*file, /,/^{$/{
+	s/^static int ll_write_end(struct file \*file, /static int ll_write_end(\n#ifdef HAVE_WRITE_BEGIN_KIOCB\n\t\t\tconst struct kiocb *kiocb,\n#else\n\t\t\tstruct file *file,\n#endif\n\t\t\t/
+	s/^{$/{\n#ifdef HAVE_WRITE_BEGIN_KIOCB\n\tstruct file *file = kiocb->ki_filp;\n#endif/
+}' lustre/llite/rw26.c
+
+# LU-20739 build: check vfs_mkdir() and can_mmap_file() alone
+#
+# EL 10.3 changes inode_operations.mkdir to return a dentry, but vfs_mkdir()
+# still returns an int, so ll_vfs_mkdir() must not be keyed on
+# HAVE_IOPS_MKDIR_RETURNS_DENTRY there.  The Lustre fix (change 71053) is for
+# master and does not apply to the 2.17.0 tag, so make its ll_vfs_mkdir()
+# change here.  This can be removed once a Lustre release includes that fix.
+fs_h="/lib/modules/$(uname -r)/build/include/linux/fs.h"
+if [ -f "$fs_h" ] && grep -q '^int vfs_mkdir(' "$fs_h" ; then
+	echo "Kernel vfs_mkdir() returns int, keying ll_vfs_mkdir() on that"
+	sed -i '/^#ifdef HAVE_IOPS_MKDIR_RETURNS_DENTRY$/{
+		N
+		s/^#ifdef HAVE_IOPS_MKDIR_RETURNS_DENTRY\n#define ll_vfs_mkdir/#ifdef HAVE_VFS_MKDIR_RETURNS_DENTRY\n#define ll_vfs_mkdir/
+	}' lustre/include/lustre_compat.h
 fi
 
 echo "Configure Lustre"
