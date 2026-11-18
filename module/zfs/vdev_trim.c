@@ -644,25 +644,35 @@ vdev_trim_xlate_last_rs_end(void *arg, zfs_range_seg64_t *physical_rs)
 		*last_rs_end = physical_rs->rs_end;
 }
 
+typedef struct trim_progress {
+	uint64_t	tp_last_offset;
+	uint64_t	tp_bytes_est;
+	uint64_t	tp_bytes_done;
+} trim_progress_t;
+
 static void
 vdev_trim_xlate_progress(void *arg, zfs_range_seg64_t *physical_rs)
 {
-	vdev_t *vd = (vdev_t *)arg;
+	trim_progress_t *tp = arg;
 
 	uint64_t size = physical_rs->rs_end - physical_rs->rs_start;
-	vd->vdev_trim_bytes_est += size;
+	tp->tp_bytes_est += size;
 
-	if (vd->vdev_trim_last_offset >= physical_rs->rs_end) {
-		vd->vdev_trim_bytes_done += size;
-	} else if (vd->vdev_trim_last_offset > physical_rs->rs_start &&
-	    vd->vdev_trim_last_offset <= physical_rs->rs_end) {
-		vd->vdev_trim_bytes_done +=
-		    vd->vdev_trim_last_offset - physical_rs->rs_start;
+	if (tp->tp_last_offset >= physical_rs->rs_end) {
+		tp->tp_bytes_done += size;
+	} else if (tp->tp_last_offset > physical_rs->rs_start &&
+	    tp->tp_last_offset <= physical_rs->rs_end) {
+		tp->tp_bytes_done +=
+		    tp->tp_last_offset - physical_rs->rs_start;
 	}
 }
 
 /*
- * Calculates the completion percentage of a manual TRIM.
+ * Calculates the completion percentage of a manual TRIM.  The totals are
+ * summed in a local trim_progress_t and published at the end, because
+ * vdev_get_stats() reads vdev_trim_bytes_{est,done} without a lock: zeroing
+ * them first would let "zpool status" report 0% while a resumed TRIM (for
+ * example after "zpool online") recalculates its progress.
  */
 static void
 vdev_trim_calculate_progress(vdev_t *vd)
@@ -671,8 +681,11 @@ vdev_trim_calculate_progress(vdev_t *vd)
 	    spa_config_held(vd->vdev_spa, SCL_CONFIG, RW_WRITER));
 	ASSERT(vd->vdev_leaf_zap != 0);
 
-	vd->vdev_trim_bytes_est = 0;
-	vd->vdev_trim_bytes_done = 0;
+	trim_progress_t tp = {
+		.tp_last_offset = vd->vdev_trim_last_offset,
+		.tp_bytes_est = 0,
+		.tp_bytes_done = 0,
+	};
 
 	for (uint64_t i = 0; i < vd->vdev_top->vdev_ms_count; i++) {
 		metaslab_t *msp = vd->vdev_top->vdev_ms[i];
@@ -693,8 +706,8 @@ vdev_trim_calculate_progress(vdev_t *vd)
 
 		/* Metaslab space after this offset has not been trimmed. */
 		vdev_xlate(vd, &logical_rs, &physical_rs, &remain_rs);
-		if (vd->vdev_trim_last_offset <= physical_rs.rs_start) {
-			vd->vdev_trim_bytes_est += ms_free;
+		if (tp.tp_last_offset <= physical_rs.rs_start) {
+			tp.tp_bytes_est += ms_free;
 			mutex_exit(&msp->ms_lock);
 			continue;
 		}
@@ -706,9 +719,9 @@ vdev_trim_calculate_progress(vdev_t *vd)
 			    vdev_trim_xlate_last_rs_end, &last_rs_end);
 		}
 
-		if (vd->vdev_trim_last_offset > last_rs_end) {
-			vd->vdev_trim_bytes_done += ms_free;
-			vd->vdev_trim_bytes_est += ms_free;
+		if (tp.tp_last_offset > last_rs_end) {
+			tp.tp_bytes_done += ms_free;
+			tp.tp_bytes_est += ms_free;
 			mutex_exit(&msp->ms_lock);
 			continue;
 		}
@@ -729,10 +742,13 @@ vdev_trim_calculate_progress(vdev_t *vd)
 			logical_rs.rs_end = zfs_rs_get_end(rs, rt);
 
 			vdev_xlate_walk(vd, &logical_rs,
-			    vdev_trim_xlate_progress, vd);
+			    vdev_trim_xlate_progress, &tp);
 		}
 		mutex_exit(&msp->ms_lock);
 	}
+
+	vd->vdev_trim_bytes_est = tp.tp_bytes_est;
+	vd->vdev_trim_bytes_done = tp.tp_bytes_done;
 }
 
 /*
