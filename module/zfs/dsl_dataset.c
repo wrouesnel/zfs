@@ -260,6 +260,28 @@ dsl_dataset_block_remapped(dsl_dataset_t *ds, uint64_t vdev, uint64_t offset,
 	}
 }
 
+/*
+ * Put a killed block on the pool's free bpobj for dsl_process_async_destroys()
+ * and charge it to $FREE.  May block on I/O to read the bpobj.
+ */
+static void
+dsl_dataset_free_bpobj_enqueue(dsl_pool_t *dp, const blkptr_t *bp,
+    dmu_tx_t *tx)
+{
+	bpobj_enqueue(&dp->dp_free_bpobj, bp, B_FALSE, tx);
+	dsl_dir_diduse_space(dp->dp_free_dir, DD_USED_HEAD,
+	    bp_get_dsize_sync(dp->dp_spa, bp), BP_GET_PSIZE(bp),
+	    BP_GET_UCSIZE(bp), tx);
+}
+
+static int
+dsl_dataset_free_bpobj_enqueue_cb(void *arg, const blkptr_t *bp,
+    dmu_tx_t *tx)
+{
+	dsl_dataset_free_bpobj_enqueue(arg, bp, tx);
+	return (0);
+}
+
 int
 dsl_dataset_block_kill(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx,
     boolean_t async)
@@ -313,10 +335,18 @@ dsl_dataset_block_kill(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx,
 		    (BP_IS_GANG(bp) || BP_GET_DEDUP(bp) ||
 		    brt_maybe_exists(spa, bp));
 
-		if (defer) {
+		if (defer && async) {
+			/*
+			 * As for the deadlist below: we are in a zio write
+			 * done callback, and bpobj_enqueue() may block
+			 * waiting for I/O to read the bpobj.  Let
+			 * dsl_dataset_sync_done() put it on the free bpobj.
+			 */
+			dprintf_bp(bp, "putting on pending free list: %s", "");
+			bplist_append(&ds->ds_pending_free_bpobj, bp);
+		} else if (defer) {
 			dprintf_bp(bp, "putting on free list: %s", "");
-			bpobj_enqueue(&ds->ds_dir->dd_pool->dp_free_bpobj,
-			    bp, B_FALSE, tx);
+			dsl_dataset_free_bpobj_enqueue(tx->tx_pool, bp, tx);
 		} else {
 			dprintf_bp(bp, "freeing ds=%llu",
 			    (u_longlong_t)ds->ds_object);
@@ -326,10 +356,6 @@ dsl_dataset_block_kill(dsl_dataset_t *ds, const blkptr_t *bp, dmu_tx_t *tx,
 		wmsum_add(&ds->ds_unique_delta, -used);
 		wmsum_add(&ds->ds_unique_comp_delta, -compressed);
 		wmsum_add(&ds->ds_unique_uncomp_delta, -uncompressed);
-
-		if (defer)
-			dsl_dir_diduse_space(tx->tx_pool->dp_free_dir,
-			    DD_USED_HEAD, used, compressed, uncompressed, tx);
 	} else {
 		dprintf_bp(bp, "putting on dead list: %s", "");
 		wmsum_add(&ds->ds_dead_delta, used);
@@ -467,6 +493,7 @@ dsl_dataset_evict_async(void *dbu)
 	dsl_bookmark_fini_ds(ds);
 
 	bplist_destroy(&ds->ds_pending_deadlist);
+	bplist_destroy(&ds->ds_pending_free_bpobj);
 	if (!ds->ds_is_snapshot)
 		dsl_dataset_deltas_fini(ds);
 	if (dsl_deadlist_is_open(&ds->ds_deadlist))
@@ -637,6 +664,7 @@ dsl_dataset_hold_obj(dsl_pool_t *dp, uint64_t dsobj, const void *tag,
 		zfs_refcount_create(&ds->ds_longholds);
 
 		bplist_create(&ds->ds_pending_deadlist);
+		bplist_create(&ds->ds_pending_free_bpobj);
 
 		if (!ds->ds_is_snapshot)
 			dsl_dataset_deltas_init(ds);
@@ -738,6 +766,7 @@ after_dsl_bookmark_fini:
 			if (!ds->ds_is_snapshot)
 				dsl_dataset_deltas_fini(ds);
 			bplist_destroy(&ds->ds_pending_deadlist);
+			bplist_destroy(&ds->ds_pending_free_bpobj);
 			mutex_destroy(&ds->ds_lock);
 			mutex_destroy(&ds->ds_opening_lock);
 			mutex_destroy(&ds->ds_sendstream_lock);
@@ -2396,6 +2425,8 @@ dsl_dataset_sync_done(dsl_dataset_t *ds, dmu_tx_t *tx)
 
 	bplist_iterate(&ds->ds_pending_deadlist,
 	    dsl_deadlist_insert_alloc_cb, &ds->ds_deadlist, tx);
+	bplist_iterate(&ds->ds_pending_free_bpobj,
+	    dsl_dataset_free_bpobj_enqueue_cb, ds->ds_dir->dd_pool, tx);
 
 	if (dsl_deadlist_is_open(&ds->ds_dir->dd_livelist)) {
 		dsl_flush_pending_livelist(ds, tx);

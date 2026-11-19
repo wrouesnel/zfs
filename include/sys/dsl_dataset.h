@@ -191,6 +191,8 @@ typedef struct dsl_dataset {
 	/* has internal locking: */
 	dsl_deadlist_t ds_deadlist;
 	bplist_t ds_pending_deadlist;
+	/* blocks killed in write-done callbacks for the pool's free bpobj */
+	bplist_t ds_pending_free_bpobj;
 
 	/*
 	 * The remap deadlist contains blocks (DVA's, really) that are
