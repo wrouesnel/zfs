@@ -4056,8 +4056,13 @@ dsl_process_async_destroys(dsl_pool_t *dp, dmu_tx_t *tx)
 	}
 	if (err != 0)
 		return (err);
+	/*
+	 * With zfs_free_bpobj_enabled=0 the free bpobj is left alone, so its
+	 * blocks still account for the space in dp_free_dir: that space is
+	 * neither leaked nor finished.
+	 */
 	if (dp->dp_free_dir != NULL && !scn->scn_async_destroying &&
-	    zfs_free_leak_on_eio &&
+	    zfs_free_bpobj_enabled && zfs_free_leak_on_eio &&
 	    (dsl_dir_phys(dp->dp_free_dir)->dd_used_bytes != 0 ||
 	    dsl_dir_phys(dp->dp_free_dir)->dd_compressed_bytes != 0 ||
 	    dsl_dir_phys(dp->dp_free_dir)->dd_uncompressed_bytes != 0)) {
@@ -4085,7 +4090,7 @@ dsl_process_async_destroys(dsl_pool_t *dp, dmu_tx_t *tx)
 	}
 
 	if (dp->dp_free_dir != NULL && !scn->scn_async_destroying &&
-	    !spa_livelist_delete_check(spa)) {
+	    zfs_free_bpobj_enabled && !spa_livelist_delete_check(spa)) {
 		/* finished; verify that space accounting went to zero */
 		ASSERT0(dsl_dir_phys(dp->dp_free_dir)->dd_used_bytes);
 		ASSERT0(dsl_dir_phys(dp->dp_free_dir)->dd_compressed_bytes);
