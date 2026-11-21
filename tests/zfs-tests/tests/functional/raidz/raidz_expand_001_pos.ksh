@@ -55,7 +55,7 @@ function cleanup
 
 	log_must set_tunable32 PREFETCH_DISABLE $prefetch_disable
 	log_must set_tunable32 SCRUB_AFTER_EXPAND $scrub_after_expand
-	log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 0
+	zinject -c all
 }
 
 function test_resilver # <pool> <parity> <dir>
@@ -118,7 +118,7 @@ function test_scrub # <pool> <parity> <dir>
 
 	reflow_size=$(get_pool_prop allocated $pool)
 	randbyte=$(( ((RANDOM<<15) + RANDOM) % $reflow_size ))
-	log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES $randbyte
+	log_must zinject -P reflow -o $randbyte $pool
 	log_must zpool attach $TESTPOOL ${raid}-0 $dir/dev-$devs
 	wait_raidz_expand_paused $TESTPOOL
 
@@ -152,7 +152,7 @@ function test_scrub # <pool> <parity> <dir>
 	log_must check_pool_status $pool "errors" "No known data errors"
 
 	log_must zpool clear $pool
-	log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 0
+	log_must zinject -c all
 	log_must zpool wait -t raidz_expand $TESTPOOL
 }
 

@@ -56,7 +56,7 @@ function cleanup
 	log_must rm -f "$TEST_BASE_DIR/dev-small"
 
 	log_must set_tunable32 EMBEDDED_SLOG_MIN_MS $embedded_slog_min_ms
-	log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 0
+	zinject -c all
 	log_must set_tunable32 SCRUB_AFTER_EXPAND $original_scrub_after_expand
 }
 
@@ -86,8 +86,9 @@ log_must zpool sync $pool
 # Without an expansion in progress the small device is refused.
 log_mustnot_expect "is too small" zpool replace -f $pool ${disks[1]} $small
 
-# Attach a new device, pausing the reflow right at the start.
-log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 1
+# Attach a new device, holding the reflow right at the start (once the
+# scratch area is copied).  The hold stays in place across the export.
+log_must zinject -P reflow -o 0 $pool
 log_must zpool attach -f $pool ${raid}-0 ${disks[$(($nparity+3))]}
 wait_raidz_expand_paused $pool
 
@@ -106,7 +107,7 @@ log_must zpool wait -t replace $pool
 log_must check_pool_status $pool "scan" "with 0 errors"
 
 # Let the expansion complete and verify the pool.
-log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 0
+log_must zinject -c all
 log_must zpool wait -t raidz_expand $pool
 
 log_must zpool scrub -w $pool

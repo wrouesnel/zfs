@@ -47,7 +47,7 @@ function cleanup
 	poolexists "$TESTPOOL" && destroy_pool "$TESTPOOL"
 	log_must rm -f "${disks[@]}"
 	log_must rm -rf "$mnt"
-	log_must restore_tunable RAIDZ_EXPAND_MAX_REFLOW_BYTES
+	zinject -c all
 	log_must restore_tunable SCRUB_AFTER_EXPAND
 }
 
@@ -117,7 +117,6 @@ function rewrite_dedup
 
 log_assert "zfs rewrite applies the width of an expanded RAID-Z vdev"
 log_onexit cleanup
-log_must save_tunable RAIDZ_EXPAND_MAX_REFLOW_BYTES
 log_must save_tunable SCRUB_AFTER_EXPAND
 log_must set_tunable32 SCRUB_AFTER_EXPAND 0
 
@@ -147,14 +146,14 @@ sync_pool "$TESTPOOL"
 # 5 wide: 3 data and 2 parity. 6 wide: 4 data and 2 parity.
 check_asizes 36000 9000 3000
 
-log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 1
+log_must zinject -P reflow -o 0 "$TESTPOOL"
 log_must zpool attach "$TESTPOOL" raidz2-0 "${disks[5]}"
 wait_raidz_expand_paused "$TESTPOOL"
 log_must eval "zpool status $TESTPOOL | grep -q 'expansion of .* in progress'"
 
 rewrite_blocks 36000 9000 3000
 
-log_must set_tunable64 RAIDZ_EXPAND_MAX_REFLOW_BYTES 0
+log_must zinject -c all
 log_must zpool wait -t raidz_expand "$TESTPOOL"
 # Blocks born from a few txgs after the expansion completes use the new width.
 sync_pool "$TESTPOOL"
