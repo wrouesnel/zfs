@@ -3287,13 +3287,28 @@ function wait_resilvered #pool timeout
        done
 }
 
+# Print the offset at which zinject holds the reflow of a raidz expansion
+# in a pool (zinject -P reflow -o OFFSET), or nothing if there is no such
+# handler or the reflow has not reached its offset yet.
+#
+# $1 pool name
+#
+function raidz_reflow_held_at #pool
+{
+	zinject | awk -v pool=${1:-$TESTPOOL} '
+	    /^ *ID +POOL +REFLOW PAUSE OFFSET/ { t = 1; next }
+	    /^$/ { t = 0 }
+	    t && $2 == pool && $4 != "-" { print $4 }'
+}
+
 # Wait for a raidz expansion to stop reflowing
 #
 # The raidz expansion tests pause a reflow by setting the tunable
-# RAIDZ_EXPAND_MAX_REFLOW_BYTES, then inspect the pool while it is
-# stopped.  A pause offset at or past the end of the reflow lets the
-# expansion run to completion instead, and it may already have completed
-# before this is called, so both states end the wait.
+# RAIDZ_EXPAND_MAX_REFLOW_BYTES, or hold it at an offset with
+# zinject -P reflow, then inspect the pool while it is stopped.  A pause
+# offset at or past the end of the reflow lets the expansion run to
+# completion instead, and it may already have completed before this is
+# called, so both states end the wait.
 #
 # $1 pool name
 # $2 timeout
@@ -3311,6 +3326,15 @@ function wait_raidz_expand_paused #pool timeout
 		# Nothing is left to wait for once it is no longer running.
 		zpool status $pool | grep -q 'expansion of .* in progress' || \
 		    return
+
+		#
+		# zinject holds the reflow at an offset.  Sync the txg that
+		# records the last copy, so that the uberblock has it.
+		#
+		if [[ -n $(raidz_reflow_held_at $pool) ]]; then
+			log_must zpool sync $pool
+			return
+		fi
 
 		#
 		# It has paused once the amount copied has reached
