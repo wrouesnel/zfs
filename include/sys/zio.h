@@ -746,6 +746,9 @@ extern hrtime_t zio_handle_io_delay(zio_t *zio);
 extern void zio_handle_import_delay(spa_t *spa, hrtime_t elapsed);
 extern void zio_handle_export_delay(spa_t *spa, hrtime_t elapsed);
 extern hrtime_t zio_handle_ready_delay(zio_t *zio);
+extern uint64_t zio_handle_raidz_reflow_pause(spa_t *spa);
+extern void zio_handle_raidz_reflow_held(spa_t *spa, uint64_t offset,
+    uint64_t sector);
 
 /*
  * Checksum ereport functions

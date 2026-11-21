@@ -4620,9 +4620,21 @@ raidz_reflow_impl(vdev_t *vd, vdev_raidz_expand_t *vre, zfs_range_tree_t *rt,
 	uint64_t next_overwrite_blkid = ubsync_blkid +
 	    ubsync_blkid / old_children - old_children;
 	VERIFY3U(next_overwrite_blkid, >, ubsync_blkid);
-	if (blkid >= next_overwrite_blkid) {
-		raidz_reflow_record_progress(vre,
-		    next_overwrite_blkid << ashift, tx);
+
+	/*
+	 * For testing, zinject can hold the reflow at an offset.  Copy
+	 * nothing at or past it (if the reflow is already past it, hold it
+	 * where it is), but move the progress across free space up to it
+	 * as for next_overwrite_blkid, so that the reflow stops exactly
+	 * there, rounded down to a sector.
+	 */
+	uint64_t stop_blkid = next_overwrite_blkid;
+	uint64_t pause_blkid = zio_handle_raidz_reflow_pause(spa) >> ashift;
+	if (pause_blkid < stop_blkid)
+		stop_blkid = MAX(pause_blkid, vre->vre_offset >> ashift);
+
+	if (blkid >= stop_blkid) {
+		raidz_reflow_record_progress(vre, stop_blkid << ashift, tx);
 		return (B_TRUE);
 	}
 
@@ -4630,7 +4642,7 @@ raidz_reflow_impl(vdev_t *vd, vdev_raidz_expand_t *vre, zfs_range_tree_t *rt,
 	size = MIN(size, (uint64_t)old_children *
 	    MIN(zfs_max_recordsize, SPA_MAXBLOCKSIZE));
 	size = MAX(size, 1 << ashift);
-	uint_t blocks = MIN(size >> ashift, next_overwrite_blkid - blkid);
+	uint_t blocks = MIN(size >> ashift, stop_blkid - blkid);
 	size = (uint64_t)blocks << ashift;
 
 	zfs_range_tree_remove(rt, offset, size);
@@ -5130,6 +5142,34 @@ io_error_exit:
 	spa_config_exit(spa, SCL_STATE, FTAG);
 }
 
+/*
+ * For testing: wait while a zinject handler holds the reflow at an offset
+ * (rounded down to a sector) that it has reached.
+ */
+static void
+raidz_reflow_zinject_hold(spa_t *spa, vdev_raidz_expand_t *vre,
+    uint64_t sector, zthr_t *zthr)
+{
+	boolean_t held = B_FALSE;
+
+	while (!zthr_iscancelled(zthr) && vre->vre_offset >=
+	    P2ALIGN_TYPED(zio_handle_raidz_reflow_pause(spa), sector,
+	    uint64_t)) {
+		if (!held) {
+			zfs_dbgmsg("reflow held by zinject at offset=%llu",
+			    (u_longlong_t)vre->vre_offset);
+			held = B_TRUE;
+		}
+		zio_handle_raidz_reflow_held(spa, vre->vre_offset, sector);
+		delay(hz);
+	}
+	if (held) {
+		zfs_dbgmsg("reflow hold by zinject ended at offset=%llu%s",
+		    (u_longlong_t)vre->vre_offset,
+		    zthr_iscancelled(zthr) ? " (cancelled)" : "");
+	}
+}
+
 static boolean_t
 spa_raidz_expand_thread_check(void *arg, zthr_t *zthr)
 {
@@ -5277,6 +5317,14 @@ spa_raidz_expand_thread(void *arg, zthr_t *zthr)
 			    vre->vre_bytes_copied && !zthr_iscancelled(zthr)) {
 				delay(hz);
 			}
+
+			/*
+			 * Hold the reflow while zinject holds it at an offset
+			 * it has reached (zinject -P reflow).  If we are
+			 * cancelled here, raidz_reflow_impl() copies nothing
+			 * past the offset either.
+			 */
+			raidz_reflow_zinject_hold(spa, vre, sectorsz, zthr);
 
 			mutex_enter(&vre->vre_lock);
 			while (vre->vre_outstanding_bytes >

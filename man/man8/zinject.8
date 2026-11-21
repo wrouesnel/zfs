@@ -14,7 +14,7 @@
 .\"
 .\" lint-ok: WARNING: sections out of conventional order: Sh SYNOPSIS
 .\"
-.Dd April 1, 2026
+.Dd November 21, 2026
 .Dt ZINJECT 8
 .Os
 .
@@ -125,6 +125,38 @@ Force a vdev error.
 .Xc
 Add an artificial delay during the future import of a pool.
 This injector is automatically cleared after the import is finished.
+.
+.It Xo
+.Nm zinject
+.Fl P Sy reflow
+.Fl o Ar offset
+.Ar pool
+.Xc
+Hold the reflow of a raidz expansion in
+.Ar pool
+at
+.Ar offset ,
+for testing.
+The offset is in bytes in the address space of the raidz vdev being expanded,
+the same as the reflow progress recorded in the uberblock
+.Po
+.Nm zdb Fl u
+.Pc ,
+and is rounded down to a multiple of the vdev's sector size
+.Pq 1 << ashift .
+The reflow copies everything before the offset, clipping the copy that would
+cross it, and then waits until the handler is cleared with
+.Fl c .
+If the offset is in free space, the recorded progress still moves up to it.
+An offset inside the area that the expansion copies through its scratch space
+.Pq 3.5 MiB for each child of the expanded vdev
+takes effect at the end of that area, and the reflow of an expansion that is
+already past the offset is held where it is.
+The handler is matched by pool name and stays in place while the pool is
+exported and imported again: the reflow does not move past the offset when the
+pool is exported, and it is held there again after the import.
+Only one such handler can exist for a pool.
+Listing the handlers shows the offset at which the reflow is held, once it is.
 .
 .It Xo
 .Nm zinject
@@ -264,6 +296,12 @@ or
 .Sy uber .
 .It Fl m
 Automatically remount the underlying filesystem.
+.It Fl o Ar offset
+Byte offset in the raidz vdev at which to hold a reflow
+.Pq with Fl P Sy reflow .
+Numeric suffixes
+.Pq K, M, G, T, P, E
+are accepted.
 .It Fl q
 Quiet mode.
 Only print the handler number added.

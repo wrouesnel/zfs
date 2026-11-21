@@ -60,7 +60,7 @@ uint32_t zio_injection_enabled = 0;
 typedef struct inject_handler {
 	int			zi_id;
 	spa_t			*zi_spa;
-	char			*zi_spa_name; /* ZINJECT_DELAY_IMPORT only */
+	char			*zi_spa_name; /* when matched by pool name */
 	zinject_record_t	zi_record;
 	uint64_t		*zi_lanes;
 	int			zi_next_lane;
@@ -879,6 +879,67 @@ zio_handle_ready_delay(zio_t *zio)
 	return (target);
 }
 
+/*
+ * For testing, hold the reflow of a raidz expansion at a given offset
+ * (zinject -P reflow -o offset).  The offset is in the raidz vdev's address
+ * space, like the reflow progress (vre_offset and the uberblock's
+ * ub_raidz_reflow_info).  Returns the lowest offset at which a handler holds
+ * the reflow of this pool, or UINT64_MAX if there is none.  The caller rounds
+ * it down to a sector.
+ *
+ * These handlers are matched by pool name and take no reference on the spa,
+ * so that they stay in place while the pool is exported and imported again.
+ */
+uint64_t
+zio_handle_raidz_reflow_pause(spa_t *spa)
+{
+	uint64_t offset = UINT64_MAX;
+
+	if (likely(zio_injection_enabled == 0))
+		return (offset);
+
+	rw_enter(&inject_lock, RW_READER);
+	for (inject_handler_t *handler = list_head(&inject_handlers);
+	    handler != NULL; handler = list_next(&inject_handlers, handler)) {
+		if (handler->zi_record.zi_cmd != ZINJECT_RAIDZ_REFLOW_PAUSE)
+			continue;
+		ASSERT3P(handler->zi_spa_name, !=, NULL);
+		if (strcmp(spa_name(spa), handler->zi_spa_name) != 0)
+			continue;
+		handler->zi_record.zi_match_count++;
+		offset = MIN(offset, handler->zi_record.zi_start);
+	}
+	rw_exit(&inject_lock);
+
+	return (offset);
+}
+
+/*
+ * The reflow of this pool is now held at the given offset.  Record it in the
+ * handlers that hold it there (zi_end, shown by zinject as "HELD AT"), so
+ * that tests can wait for it and compare it with the offset they asked for.
+ */
+void
+zio_handle_raidz_reflow_held(spa_t *spa, uint64_t offset, uint64_t sector)
+{
+	if (likely(zio_injection_enabled == 0))
+		return;
+
+	rw_enter(&inject_lock, RW_READER);
+	for (inject_handler_t *handler = list_head(&inject_handlers);
+	    handler != NULL; handler = list_next(&inject_handlers, handler)) {
+		if (handler->zi_record.zi_cmd != ZINJECT_RAIDZ_REFLOW_PAUSE ||
+		    strcmp(spa_name(spa), handler->zi_spa_name) != 0 ||
+		    P2ALIGN_TYPED(handler->zi_record.zi_start, sector,
+		    uint64_t) > offset)
+			continue;
+		if (handler->zi_record.zi_end != offset)
+			handler->zi_record.zi_inject_count++;
+		handler->zi_record.zi_end = offset;
+	}
+	rw_exit(&inject_lock);
+}
+
 static int
 zio_calculate_range(const char *pool, zinject_record_t *record)
 {
@@ -1008,11 +1069,21 @@ zio_inject_fault(char *name, int flags, int *id, zinject_record_t *record)
 
 	if (!(flags & ZINJECT_NULL)) {
 		/*
-		 * Pool delays for import or export don't take an
-		 * injection reference on the spa. Instead they
-		 * rely on matching by name.
+		 * Pool delays for import or export and raidz reflow
+		 * pauses don't take an injection reference on the spa.
+		 * Instead they rely on matching by name.
 		 */
-		if (record->zi_cmd == ZINJECT_DELAY_IMPORT ||
+		if (record->zi_cmd == ZINJECT_RAIDZ_REFLOW_PAUSE) {
+			/*
+			 * One reflow pause per pool, which need not be
+			 * imported yet.  zi_end is where it holds the reflow,
+			 * once it does.
+			 */
+			if (zio_pool_handler_exists(name, record->zi_cmd))
+				return (SET_ERROR(EEXIST));
+			record->zi_end = UINT64_MAX;
+			spa = NULL;
+		} else if (record->zi_cmd == ZINJECT_DELAY_IMPORT ||
 		    record->zi_cmd == ZINJECT_DELAY_EXPORT) {
 			if (record->zi_duration <= 0)
 				return (SET_ERROR(EINVAL));
