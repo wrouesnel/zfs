@@ -33,6 +33,10 @@
 
 verify_runnable "both"
 
+typeset LOOPDEV=""
+typeset LOOPFILE=""
+typeset FAILED_RESCAN=""
+
 function cleanup
 {
 	# Destroy the scsi_debug pool
@@ -40,15 +44,43 @@ function cleanup
 		if  [ -n "$host" ] ; then
 			# Re-enable the disk
 			scan_scsi_hosts $host
+			block_device_wait
 
 			# Device may have changed names after being inserted
 			SDISK=$(get_debug_device)
-			log_must ln $DEV_RDSKDIR/$SDISK $REALDISK
+			if [[ ! -b $DEV_RDSKDIR/$SDISK ]] ; then
+				log_note "scsi_debug disk not back ('$SDISK')," \
+				    "rescanning all hosts"
+				scan_scsi_hosts
+				block_device_wait
+				SDISK=$(get_debug_device)
+			fi
+
+			if [[ -b $DEV_RDSKDIR/$SDISK ]] ; then
+				log_must ln $DEV_RDSKDIR/$SDISK $REALDISK
+			elif [[ -n "$BACKUP" && -e $BACKUP ]] ; then
+				#
+				# The disk didn't come back.  Put the pool's
+				# image on a loop device at the same path, so
+				# testpool2 can still be resumed and destroyed
+				# below instead of staying suspended for the
+				# rest of the run.
+				#
+				log_note "scsi_debug disk not back ('$SDISK')," \
+				    "using a loop device"
+				LOOPFILE=$TEST_BASE_DIR/kstat-state-loopfile
+				log_must truncate -s ${MINVDEVSIZE_MB}m \
+				    $LOOPFILE
+				LOOPDEV=$(losetup -f --show $LOOPFILE)
+				log_must [ -b "$LOOPDEV" ]
+				log_must ln $LOOPDEV $REALDISK
+				FAILED_RESCAN="'$SDISK'"
+			fi
 		fi
 
 		# Restore our working pool image
 		if [ -n "$BACKUP" ] ; then
-			gunzip -c $BACKUP > $REALDISK
+			[ -b $REALDISK ] && gunzip -c $BACKUP > $REALDISK
 			log_must rm -f $BACKUP
 		fi
 
@@ -64,7 +96,15 @@ function cleanup
 			destroy_pool $TESTPOOL2
 		fi
 		log_must rm -f $REALDISK
+		if [ -n "$LOOPDEV" ] ; then
+			log_must losetup -d $LOOPDEV
+			log_must rm -f $LOOPFILE
+		fi
 		unload_scsi_debug
+		if [ -n "$FAILED_RESCAN" ] ; then
+			log_fail "scsi_debug disk didn't come back after the" \
+			    "rescan (get_debug_device: $FAILED_RESCAN)"
+		fi
 	fi
 }
 
