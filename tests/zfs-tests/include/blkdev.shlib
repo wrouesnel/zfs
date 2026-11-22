@@ -478,13 +478,22 @@ function unload_scsi_debug
 #
 function get_debug_device
 {
+	typeset val
 	for i in {1..10} ; do
 		val=$(lsscsi | awk '/scsi_debug/ {print $6; exit}' | cut -d/ -f3)
 
-		# lsscsi can take time to settle
-		if [ "$val" != "-" ] ; then
-			break
-		fi
+		# No scsi_debug device at all.
+		[[ -z $val ]] && break
+
+		#
+		# lsscsi can take time to settle.  Until the disk's block
+		# device is registered it prints "-", or "unexpected
+		# scan_for_first error" (so $6 is "unexpected") while the
+		# device's block/ directory exists but is still empty, as it
+		# can be right after a host rescan.  Only return a name once
+		# it is a block device.
+		#
+		[[ -b $DEV_RDSKDIR/$val ]] && break
 		sleep 1
 	done
 	echo "$val"
