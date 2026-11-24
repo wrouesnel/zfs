@@ -45,6 +45,7 @@ dist_man_MANS = \
 	%D%/man8/zfs-list.8 \
 	%D%/man8/zfs-load-key.8 \
 	%D%/man8/zfs-mount.8 \
+	%D%/man8/zfs-fileblocksize.8 \
 	%D%/man8/zfs-project.8 \
 	%D%/man8/zfs-projectspace.8 \
 	%D%/man8/zfs-promote.8 \
