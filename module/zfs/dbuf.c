@@ -2258,13 +2258,34 @@ dbuf_release_bp(dmu_buf_impl_t *db)
  * dirtied again.
  */
 static void
-dbuf_redirty(dbuf_dirty_record_t *dr)
+dbuf_redirty(dbuf_dirty_record_t *dr, dmu_tx_t *tx)
 {
 	dmu_buf_impl_t *db = dr->dr_dbuf;
 
 	ASSERT(MUTEX_HELD(&db->db_mtx));
+	ASSERT3U(dr->dr_txg, ==, tx->tx_txg);
 
 	if (db->db_level == 0 && db->db_blkid != DMU_BONUS_BLKID) {
+		blkptr_t *bp = &dr->dt.dl.dr_overridden_by;
+
+		/*
+		 * A block that dmu_sync() wrote for this buffer stays
+		 * allocated until this txg syncs, although nothing counts
+		 * it: the buffer's dirty data is counted once, however
+		 * often it is overridden.  Charge it to the pool's root
+		 * dsl_dir for this txg, as zil_charge_normal_blk() does
+		 * log blocks, so that repeated synchronous overwrites
+		 * make writers wait for a sync before they fill the pool.
+		 */
+		if (dr->dt.dl.dr_override_state == DR_OVERRIDDEN &&
+		    !BP_IS_HOLE(bp) && !dr->dt.dl.dr_nopwrite &&
+		    !dr->dt.dl.dr_brtwrite) {
+			spa_t *spa = db->db_objset->os_spa;
+
+			dsl_dir_willuse_space(spa_get_dsl(spa)->dp_root_dir,
+			    bp_get_dsize(spa, bp), tx);
+		}
+
 		/*
 		 * If this buffer has already been written out,
 		 * we now need to reset its state.
@@ -2421,7 +2442,7 @@ dbuf_dirty(dmu_buf_impl_t *db, dmu_tx_t *tx)
 	if (dr_next && dr_next->dr_txg == tx->tx_txg) {
 		DB_DNODE_EXIT(db);
 
-		dbuf_redirty(dr_next);
+		dbuf_redirty(dr_next, tx);
 		mutex_exit(&db->db_mtx);
 		return (dr_next);
 	}
@@ -2787,7 +2808,7 @@ dmu_buf_will_dirty_flags(dmu_buf_t *db_fake, dmu_tx_t *tx, dmu_flags_t flags)
 				undirty = B_TRUE;
 			} else {
 				/* This dbuf is already dirty and cached. */
-				dbuf_redirty(dr);
+				dbuf_redirty(dr, tx);
 				mutex_exit(&db->db_mtx);
 				return;
 			}
