@@ -54,6 +54,7 @@
 #include <sys/zfs_quota.h>
 #include <sys/zfs_vfsops.h>
 #include <sys/zfs_znode.h>
+#include <sys/zfs_project.h>
 
 /*
  * Enables access to the block cloning feature. If this setting is 0, then even
@@ -822,7 +823,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 
 		uint64_t blksz;
 		if (lr->lr_length == UINT64_MAX && zp->z_size <= zp->z_blksz) {
-			if (zp->z_blksz > zfsvfs->z_max_blksz &&
+			if (zp->z_blksz > ZFS_MAX_BLKSZ(zp) &&
 			    !ISP2(zp->z_blksz)) {
 				/*
 				 * File's blocksize is already larger than the
@@ -831,7 +832,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 				 */
 				blksz = 1 << highbit64(zp->z_blksz);
 			} else {
-				blksz = zfsvfs->z_max_blksz;
+				blksz = ZFS_MAX_BLKSZ(zp);
 			}
 			blksz = MIN(blksz, P2ROUNDUP(end_size,
 			    SPA_MINBLOCKSIZE));
@@ -1317,6 +1318,229 @@ zfs_rewrite(znode_t *zp, uint64_t off, uint64_t len, uint64_t flags,
 	return (error);
 }
 
+/* Block sizes fsx_extsize may set: the classic range, no large_blocks. */
+static boolean_t
+zfs_extsize_valid(uint64_t blksz)
+{
+	return (ISP2(blksz) && blksz >= SPA_MINBLOCKSIZE &&
+	    blksz <= SPA_OLD_MAXBLOCKSIZE);
+}
+
+/*
+ * A pin may not exceed recordsize, and may not send a file's blocks to the
+ * special class when recordsize-sized ones would not go there.
+ */
+static int
+zfs_extsize_allowed(zfsvfs_t *zfsvfs, uint64_t blksz)
+{
+	if (blksz > zfsvfs->z_max_blksz ||
+	    blksz <= zfsvfs->z_os->os_zpl_special_smallblock)
+		return (SET_ERROR(EINVAL));
+	return (0);
+}
+
+/*
+ * Load the block size a file is pinned to; zp may not have its zfsvfs yet.
+ * A file pinned before the size was stored is pinned to its block size, if
+ * older code didn't grow it to an odd size.
+ */
+void
+zfs_extsize_load(zfsvfs_t *zfsvfs, znode_t *zp)
+{
+	uint64_t blksz;
+
+	zp->z_extsize = 0;
+	if (!(zp->z_pflags & ZFS_FIXED_BLKSZ))
+		return;
+	if (zp->z_is_sa && sa_lookup(zp->z_sa_hdl, SA_ZPL_EXTSIZE(zfsvfs),
+	    &blksz, sizeof (blksz)) == 0) {
+		if (zfs_extsize_valid(blksz))
+			zp->z_extsize = blksz;
+	} else if (zfs_extsize_valid(zp->z_blksz)) {
+		zp->z_extsize = zp->z_blksz;
+	}
+}
+
+/*
+ * The block size a new file or directory in dzp inherits through
+ * FS_XFLAG_EXTSZINHERIT, or 0.
+ */
+uint64_t
+zfs_inherit_extsize(znode_t *dzp)
+{
+	zfsvfs_t *zfsvfs = ZTOZSB(dzp);
+	uint64_t blksz;
+
+	if (!(dzp->z_pflags & ZFS_EXTSZINHERIT) || !zfsvfs->z_fileblocksize ||
+	    !dzp->z_is_sa || sa_lookup(dzp->z_sa_hdl, SA_ZPL_EXTSIZE(zfsvfs),
+	    &blksz, sizeof (blksz)) != 0 || !zfs_extsize_valid(blksz) ||
+	    zfs_extsize_allowed(zfsvfs, blksz) != 0)
+		return (0);
+	return (blksz);
+}
+
+/* FS_IOC_FSGETXATTR: report the fsx_extsize setting, if any. */
+int
+zfs_get_extsize(znode_t *zp, uint32_t *xflags, uint32_t *extsize)
+{
+	zfsvfs_t *zfsvfs = ZTOZSB(zp);
+	uint64_t blksz = 0;
+	int error;
+
+	if ((error = zfs_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
+		return (error);
+
+	if (ZFS_BLKSZ_FIXED(zp)) {
+		*xflags |= FS_XFLAG_EXTSIZE;
+		*extsize = zp->z_blksz;
+	} else if ((zp->z_pflags & ZFS_EXTSZINHERIT) &&
+	    sa_lookup(zp->z_sa_hdl, SA_ZPL_EXTSIZE(zfsvfs), &blksz,
+	    sizeof (blksz)) == 0) {
+		*xflags |= FS_XFLAG_EXTSZINHERIT;
+		*extsize = blksz;
+	}
+
+	zfs_exit(zfsvfs, FTAG);
+	return (0);
+}
+
+/*
+ * FS_IOC_FSSETXATTR fsx_extsize: fix an empty file's block size, or set the
+ * size a directory passes on.  No flag clears it; files keep their blocks.
+ * With check_only, report whether the change would be refused, so that the
+ * caller can do so before changing other attributes.
+ */
+int
+zfs_set_extsize(znode_t *zp, uint32_t xflags, uint32_t extsize,
+    boolean_t check_only)
+{
+	zfsvfs_t *zfsvfs = ZTOZSB(zp);
+	objset_t *os = zfsvfs->z_os;
+	zfs_locked_range_t *lr = NULL;
+	sa_bulk_attr_t bulk[2];
+	int count = 0;
+	boolean_t dir;
+	uint64_t flag;
+	uint64_t blksz;
+	uint64_t cur = 0;
+	uint32_t want;
+	uint64_t pflags;
+	u_longlong_t dummy;
+	dmu_tx_t *tx;
+	int error;
+
+	if ((error = zfs_enter_verify_zp(zfsvfs, zp, FTAG)) != 0)
+		return (error);
+
+	/* As on XFS, EXTSIZE is for files and EXTSZINHERIT for directories. */
+	dir = S_ISDIR(zp->z_mode);
+	flag = dir ? ZFS_EXTSZINHERIT : ZFS_FIXED_BLKSZ;
+	want = dir ? FS_XFLAG_EXTSZINHERIT : S_ISREG(zp->z_mode) ?
+	    FS_XFLAG_EXTSIZE : 0;
+	blksz = (xflags & want) ? extsize : 0;
+	if (xflags & (FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT) & ~want) {
+		zfs_exit(zfsvfs, FTAG);
+		return (SET_ERROR(EINVAL));
+	}
+	if (want == 0) {
+		zfs_exit(zfsvfs, FTAG);
+		return (0);
+	}
+
+	if (!dir)
+		lr = zfs_rangelock_enter(&zp->z_rangelock, 0, UINT64_MAX,
+		    RL_WRITER);
+
+	if (zp->z_pflags & flag) {
+		if (dir)
+			(void) sa_lookup(zp->z_sa_hdl, SA_ZPL_EXTSIZE(zfsvfs),
+			    &cur, sizeof (cur));
+		else if (ZFS_BLKSZ_FIXED(zp))
+			cur = zp->z_blksz;
+	}
+	if (blksz == cur && (blksz != 0 || !(zp->z_pflags & flag))) {
+		error = 0;
+		goto out;
+	}
+	if (blksz != 0 && !zfs_extsize_valid(blksz)) {
+		error = SET_ERROR(EINVAL);
+		goto out;
+	}
+	if (blksz != 0 && (error = zfs_extsize_allowed(zfsvfs, blksz)) != 0)
+		goto out;
+	/* As zfs_setattr() refuses other changes to an immutable file. */
+	if ((zp->z_pflags & ZFS_IMMUTABLE) || (xflags & FS_XFLAG_IMMUTABLE)) {
+		error = SET_ERROR(EPERM);
+		goto out;
+	}
+	if (blksz != 0 && !zfsvfs->z_fileblocksize) {
+		error = SET_ERROR(EOPNOTSUPP);
+		goto out;
+	}
+	if (zfs_is_readonly(zfsvfs)) {
+		error = SET_ERROR(EROFS);
+		goto out;
+	}
+	/* The block size of a file with data can't change. */
+	if (!dir && blksz != 0 && zp->z_size != 0) {
+		error = SET_ERROR(EINVAL);
+		goto out;
+	}
+	/* A znode_phys_t has no room for the size. */
+	if (blksz != 0 && !zp->z_is_sa) {
+		error = SET_ERROR(EOPNOTSUPP);
+		goto out;
+	}
+	if (check_only)
+		goto out;
+
+	tx = dmu_tx_create(os);
+	dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_TRUE);
+	if (!dir && blksz != 0)
+		dmu_tx_hold_write(tx, zp->z_id, 0, blksz);
+	zfs_sa_upgrade_txholds(tx, zp);
+	error = dmu_tx_assign(tx, DMU_TX_WAIT);
+	if (error != 0) {
+		dmu_tx_abort(tx);
+		goto out;
+	}
+
+	if (!dir && blksz != 0) {
+		error = dmu_object_set_blocksize(os, zp->z_id, blksz, 0, tx);
+		if (error != 0) {
+			dmu_tx_commit(tx);
+			goto out;
+		}
+		dmu_object_size_from_db(sa_get_db(zp->z_sa_hdl), &zp->z_blksz,
+		    &dummy);
+	}
+
+	mutex_enter(&zp->z_lock);
+	pflags = blksz != 0 ? zp->z_pflags | flag : zp->z_pflags & ~flag;
+	if (blksz != 0)
+		SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_EXTSIZE(zfsvfs), NULL,
+		    &blksz, sizeof (blksz));
+	SA_ADD_BULK_ATTR(bulk, count, SA_ZPL_FLAGS(zfsvfs), NULL, &pflags,
+	    sizeof (pflags));
+	VERIFY0(sa_bulk_update(zp->z_sa_hdl, bulk, count, tx));
+	zp->z_pflags = pflags;
+	if (!dir)
+		zp->z_extsize = blksz;
+	mutex_exit(&zp->z_lock);
+	dmu_tx_commit(tx);
+
+	/*
+	 * Not in the ZIL, so wait for the txg: logged writes and creates must
+	 * not replay without it.  Setting a block size is rare.
+	 */
+	txg_wait_synced(dmu_objset_pool(os), 0);
+out:
+	if (lr != NULL)
+		zfs_rangelock_exit(lr);
+	zfs_exit(zfsvfs, FTAG);
+	return (error);
+}
+
 int
 zfs_getsecattr(znode_t *zp, vsecattr_t *vsecp, int flag, cred_t *cr)
 {
@@ -1382,8 +1606,8 @@ zfs_get_direct_alignment(znode_t *zp, uint64_t *alignp)
 	 * maximum (meaning, if the file grew past the current block size, the
 	 * block size could would be increased).
 	 */
-	if (zp->z_size <= zp->z_blksz && zp->z_blksz < zfsvfs->z_max_blksz)
-		*alignp = MAX(zfsvfs->z_max_blksz, PAGE_SIZE);
+	if (zp->z_size <= zp->z_blksz && zp->z_blksz < ZFS_MAX_BLKSZ(zp))
+		*alignp = MAX(ZFS_MAX_BLKSZ(zp), PAGE_SIZE);
 	else
 		*alignp = MAX(zp->z_blksz, PAGE_SIZE);
 
@@ -1792,7 +2016,7 @@ zfs_clone_range_locked(znode_t *inzp, uint64_t inoff, znode_t *outzp,
 	 * that block size forever, that can be as small as 512 bytes, no
 	 * matter how big the destination grow later.
 	 */
-	if (len <= inblksz && inblksz < outzfsvfs->z_max_blksz &&
+	if (len <= inblksz && inblksz < ZFS_MAX_BLKSZ(outzp) &&
 	    outzp->z_size <= inblksz && outoff + len > inblksz)
 		return (SET_ERROR(EINVAL));
 

@@ -265,7 +265,7 @@ zfs_ioctl_getxattr(vnode_t *vp, zfsxattr_t *fsx)
 	    FS_PROJINHERIT_FL : 0;
 	fsx->fsx_projid = zp->z_projid;
 
-	return (0);
+	return (zfs_get_extsize(zp, &fsx->fsx_xflags, &fsx->fsx_extsize));
 }
 
 static int
@@ -307,7 +307,28 @@ zfs_ioctl_setxattr(vnode_t *vp, zfsxattr_t *fsx, cred_t *cr)
 	if (!zpl_is_valid_projid(fsx->fsx_projid))
 		return (SET_ERROR(EINVAL));
 
-	err = zfs_ioctl_setflags(vp, fsx->fsx_xflags, &xva);
+	err = zfs_ioctl_setflags(vp, fsx->fsx_xflags &
+	    ~(FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT), &xva);
+	if (err)
+		return (err);
+
+	/*
+	 * zfs_ioctl_setflags() doesn't check ownership; only the owner may
+	 * change the extent size, as on Linux.
+	 */
+	if ((fsx->fsx_xflags & (FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT)) ||
+	    (zp->z_pflags & (ZFS_FIXED_BLKSZ | ZFS_EXTSZINHERIT))) {
+		err = secpolicy_vnode_owner(vp, cr, zfs_fuid_map_id(
+		    zp->z_zfsvfs, zp->z_uid, cr, ZFS_OWNER));
+		if (err)
+			return (err);
+	}
+
+	/*
+	 * The extent size is set last, as it is the hardest to undo; check it
+	 * first so that a refusal changes nothing.
+	 */
+	err = zfs_set_extsize(zp, fsx->fsx_xflags, fsx->fsx_extsize, B_TRUE);
 	if (err)
 		return (err);
 
@@ -316,8 +337,11 @@ zfs_ioctl_setxattr(vnode_t *vp, zfsxattr_t *fsx, cred_t *cr)
 	xoap->xoa_projid = fsx->fsx_projid;
 
 	err = zfs_setattr(zp, (vattr_t *)&xva, 0, cr);
+	if (err)
+		return (err);
 
-	return (err);
+	return (zfs_set_extsize(zp, fsx->fsx_xflags, fsx->fsx_extsize,
+	    B_FALSE));
 }
 
 static int

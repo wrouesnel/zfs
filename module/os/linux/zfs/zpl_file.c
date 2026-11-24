@@ -1143,9 +1143,15 @@ zpl_ioctl_getxattr(struct file *filp, void __user *arg)
 	zfsxattr_t fsx = { 0 };
 	struct inode *ip = file_inode(filp);
 	int err;
+	fstrans_cookie_t cookie;
 
 	fsx.fsx_xflags = __zpl_ioctl_getxflags(ip);
 	fsx.fsx_projid = ITOZ(ip)->z_projid;
+	cookie = spl_fstrans_mark();
+	err = -zfs_get_extsize(ITOZ(ip), &fsx.fsx_xflags, &fsx.fsx_extsize);
+	spl_fstrans_unmark(cookie);
+	if (err)
+		return (err);
 	err = copy_to_user(arg, &fsx, sizeof (fsx));
 
 	return (err);
@@ -1168,7 +1174,8 @@ zpl_ioctl_setxattr(struct file *filp, void __user *arg)
 	if (!zpl_is_valid_projid(fsx.fsx_projid))
 		return (-EINVAL);
 
-	err = __zpl_ioctl_setxflags(ip, fsx.fsx_xflags, &xva);
+	err = __zpl_ioctl_setxflags(ip, fsx.fsx_xflags &
+	    ~(FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT), &xva);
 	if (err)
 		return (err);
 
@@ -1176,9 +1183,19 @@ zpl_ioctl_setxattr(struct file *filp, void __user *arg)
 	XVA_SET_REQ(&xva, XAT_PROJID);
 	xoap->xoa_projid = fsx.fsx_projid;
 
+	/*
+	 * The extent size is set last, as it is the hardest to undo; check it
+	 * first so that a refusal changes nothing.
+	 */
 	crhold(cr);
 	cookie = spl_fstrans_mark();
-	err = -zfs_setattr(ITOZ(ip), (vattr_t *)&xva, 0, cr);
+	err = -zfs_set_extsize(ITOZ(ip), fsx.fsx_xflags, fsx.fsx_extsize,
+	    B_TRUE);
+	if (err == 0)
+		err = -zfs_setattr(ITOZ(ip), (vattr_t *)&xva, 0, cr);
+	if (err == 0)
+		err = -zfs_set_extsize(ITOZ(ip), fsx.fsx_xflags,
+		    fsx.fsx_extsize, B_FALSE);
 	spl_fstrans_unmark(cookie);
 	crfree(cr);
 

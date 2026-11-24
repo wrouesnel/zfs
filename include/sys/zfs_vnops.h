@@ -33,6 +33,10 @@ extern int zfs_clone_range_replay(znode_t *, uint64_t, uint64_t, uint64_t,
 extern int zfs_dedupe_range(znode_t *, uint64_t, znode_t *, uint64_t,
     uint64_t *, cred_t *, boolean_t, boolean_t *);
 extern int zfs_rewrite(znode_t *, uint64_t, uint64_t, uint64_t, uint64_t);
+extern int zfs_set_extsize(znode_t *, uint32_t, uint32_t, boolean_t);
+extern uint64_t zfs_inherit_extsize(znode_t *);
+extern void zfs_extsize_load(zfsvfs_t *, znode_t *);
+extern int zfs_get_extsize(znode_t *, uint32_t *, uint32_t *);
 
 extern int zfs_getsecattr(znode_t *, vsecattr_t *, int, cred_t *);
 extern int zfs_setsecattr(znode_t *, vsecattr_t *, int, cred_t *);
