@@ -185,14 +185,30 @@ zfs_project_handle_one(const char *name, zfs_project_control_t *zpc)
 	zfsxattr_t fsx;
 	int ret, fd;
 
-	fd = open(name, O_RDONLY | O_NOCTTY);
+	/*
+	 * Below the top, don't follow a symlink swapped in after readdir(),
+	 * or block on a FIFO.
+	 */
+	fd = open(name, O_RDONLY | O_NOCTTY |
+	    (zpc->zpc_ignore_noent ? O_NOFOLLOW | O_NONBLOCK : 0));
 	if (fd < 0) {
-		if (errno == ENOENT && zpc->zpc_ignore_noent)
+		if (zpc->zpc_ignore_noent &&
+		    (errno == ENOENT || errno == ELOOP || errno == ENXIO))
 			return (0);
 
 		(void) fprintf(stderr, "failed to open %s: %s\n",
 		    name, strerror(errno));
 		return (fd);
+	}
+
+	if (zpc->zpc_ignore_noent) {
+		struct stat st;
+
+		if (fstat(fd, &st) != 0 ||
+		    !(S_ISREG(st.st_mode) || S_ISDIR(st.st_mode))) {
+			close(fd);
+			return (0);
+		}
 	}
 
 	ret = ioctl(fd, ZFS_IOC_FSGETXATTR, &fsx);
@@ -304,6 +320,7 @@ zfs_project_handle_dir(const char *name, zfs_project_control_t *zpc,
 	struct dirent *ent;
 	DIR *dir;
 	int ret = 0;
+	int type;
 
 	dir = opendir(name);
 	if (dir == NULL) {
@@ -318,8 +335,8 @@ zfs_project_handle_dir(const char *name, zfs_project_control_t *zpc,
 
 	/* Non-top item, ignore the case of being removed or renamed by race. */
 	zpc->zpc_ignore_noent = B_TRUE;
-	errno = 0;
-	while (!ret && (ent = readdir(dir)) != NULL) {
+	/* Skipped entries may leave errno set; only readdir()'s counts. */
+	while (!ret && (errno = 0, ent = readdir(dir)) != NULL) {
 		char *fullname;
 
 		/* skip "." and ".." */
@@ -337,8 +354,27 @@ zfs_project_handle_dir(const char *name, zfs_project_control_t *zpc,
 			break;
 		}
 
+		/* Only files and directories have project IDs. */
+		type = ent->d_type;
+		if (type == DT_UNKNOWN) {
+			struct stat st;
+
+			if (lstat(fullname, &st) != 0)
+				type = DT_UNKNOWN;
+			else if (S_ISDIR(st.st_mode))
+				type = DT_DIR;
+			else if (S_ISREG(st.st_mode))
+				type = DT_REG;
+			else
+				type = DT_LNK;
+		}
+		if (type != DT_REG && type != DT_DIR) {
+			free(fullname);
+			continue;
+		}
+
 		ret = zfs_project_handle_one(fullname, zpc);
-		if (!ret && zpc->zpc_recursive && ent->d_type == DT_DIR)
+		if (!ret && zpc->zpc_recursive && type == DT_DIR)
 			zfs_project_item_alloc(head, fullname);
 
 		free(fullname);

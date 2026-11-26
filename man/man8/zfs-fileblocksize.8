@@ -75,6 +75,9 @@ Block cloning, such as
 into a file whose block size differs from the source's fails with
 .Er EINVAL ,
 so a clone into a directory with a setting may instead copy the data or fail.
+.Fl r
+does not follow symbolic links, and skips entries that are neither regular
+files nor directories.
 .Pp
 These are the extent size settings of the
 .Dv FS_IOC_FSGETXATTR

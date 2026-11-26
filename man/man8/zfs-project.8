@@ -51,6 +51,10 @@
 .Ar file Ns | Ns Ar directory Ns …
 .
 .Sh DESCRIPTION
+With
+.Fl r ,
+symbolic links are not followed, and entries that are neither regular files
+nor directories are skipped.
 .Bl -tag -width ""
 .It Xo
 .Nm zfs
