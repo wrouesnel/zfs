@@ -6285,6 +6285,13 @@ typedef struct dump_bytes_io {
 	caddr_t		dbi_buf;
 	int		dbi_len;
 	int		dbi_err;
+#ifdef USE_SEND_TASKQ
+	kmutex_t	dbi_lock;
+	kcondvar_t	dbi_cv;
+	kthread_t	*dbi_thread;	/* the taskq thread, while writing */
+	boolean_t	dbi_done;
+	boolean_t	dbi_interrupted;
+#endif
 } dump_bytes_io_t;
 
 static void
@@ -6297,7 +6304,33 @@ dump_bytes_cb(void *arg)
 	fp = dbi->dbi_fp;
 	buf = dbi->dbi_buf;
 
+#ifdef USE_SEND_TASKQ
+	/*
+	 * The sending thread waits for us, and a signal sent to it can't
+	 * interrupt a write blocked here, on another thread.  So let the
+	 * sending thread interrupt this thread instead (dump_bytes()).
+	 */
+	mutex_enter(&dbi->dbi_lock);
+	if (dbi->dbi_interrupted) {
+		dbi->dbi_err = SET_ERROR(EINTR);
+		goto done;
+	}
+	dbi->dbi_thread = curthread;
+	zfs_file_io_interruptible_enter();
+	mutex_exit(&dbi->dbi_lock);
+#endif
+
 	dbi->dbi_err = zfs_file_write(fp, buf, dbi->dbi_len, NULL);
+
+#ifdef USE_SEND_TASKQ
+	mutex_enter(&dbi->dbi_lock);
+	dbi->dbi_thread = NULL;
+	zfs_file_io_interruptible_exit();
+done:
+	dbi->dbi_done = B_TRUE;
+	cv_broadcast(&dbi->dbi_cv);
+	mutex_exit(&dbi->dbi_lock);
+#endif
 }
 
 typedef struct dump_bytes_arg {
@@ -6319,9 +6352,37 @@ dump_bytes(objset_t *os, void *buf, int len, void *arg)
 	dbi.dbi_len = len;
 
 #ifdef USE_SEND_TASKQ
+	mutex_init(&dbi.dbi_lock, NULL, MUTEX_DEFAULT, NULL);
+	cv_init(&dbi.dbi_cv, NULL, CV_DEFAULT, NULL);
+	dbi.dbi_thread = NULL;
+	dbi.dbi_done = B_FALSE;
+	dbi.dbi_interrupted = B_FALSE;
+
 	taskq_dispatch_ent(dba->dba_tq, dump_bytes_cb, &dbi, TQ_SLEEP,
 	    &dba->dba_tqent);
+
+	/*
+	 * Wait for the write, but stay killable: on a signal, interrupt the
+	 * write on the taskq thread, as the signal would have interrupted it
+	 * here, and wait for it to stop before returning, so nothing of this
+	 * send is left running once the ioctl returns.
+	 */
+	mutex_enter(&dbi.dbi_lock);
+	while (!dbi.dbi_done) {
+		if (dbi.dbi_interrupted) {
+			cv_wait(&dbi.dbi_cv, &dbi.dbi_lock);
+		} else if (cv_wait_sig(&dbi.dbi_cv, &dbi.dbi_lock) == 0 &&
+		    issig()) {
+			dbi.dbi_interrupted = B_TRUE;
+			if (dbi.dbi_thread != NULL)
+				zfs_file_io_interrupt(dbi.dbi_thread);
+		}
+	}
+	mutex_exit(&dbi.dbi_lock);
 	taskq_wait(dba->dba_tq);
+
+	cv_destroy(&dbi.dbi_cv);
+	mutex_destroy(&dbi.dbi_lock);
 #else
 	dump_bytes_cb(&dbi);
 #endif

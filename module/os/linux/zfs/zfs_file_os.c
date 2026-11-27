@@ -372,6 +372,41 @@ zfs_file_unlink(const char *path)
  *
  * Returns pointer to file struct or NULL
  */
+/*
+ * Taskq threads block every signal (taskq_thread()).  Let SIGKILL through
+ * while this thread does I/O for another thread, so that thread can
+ * interrupt it with zfs_file_io_interrupt().  A kernel thread never acts on
+ * the signal; it only makes a blocked pipe or socket read or write return
+ * -ERESTARTSYS.
+ */
+void
+zfs_file_io_interruptible_enter(void)
+{
+	sigset_t set;
+
+	allow_signal(SIGKILL);
+	sigemptyset(&set);
+	sigaddset(&set, SIGKILL);
+	sigprocmask(SIG_UNBLOCK, &set, NULL);
+}
+
+void
+zfs_file_io_interruptible_exit(void)
+{
+	sigset_t set;
+
+	sigfillset(&set);
+	sigprocmask(SIG_BLOCK, &set, NULL);
+	disallow_signal(SIGKILL);
+	flush_signals(current);
+}
+
+void
+zfs_file_io_interrupt(kthread_t *t)
+{
+	send_sig(SIGKILL, t, 1);
+}
+
 zfs_file_t *
 zfs_file_get(int fd)
 {
