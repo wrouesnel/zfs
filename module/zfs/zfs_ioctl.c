@@ -6276,7 +6276,7 @@ out:
  * When stack space is limited, we write replication stream data to the target
  * on a separate taskq thread, to make sure there's enough stack space.
  */
-#ifndef HAVE_LARGE_STACKS
+#if 1	/* DEMO ONLY (openzfs-reproducers): force the send taskq path of small-stack kernels */
 #define	USE_SEND_TASKQ	1
 #endif
 
