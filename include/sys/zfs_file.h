@@ -51,6 +51,18 @@ int zfs_file_deallocate(zfs_file_t *fp, loff_t offset, loff_t len);
 loff_t zfs_file_off(zfs_file_t *fp);
 int zfs_file_unlink(const char *);
 
+#ifdef _KERNEL
+/*
+ * For a taskq thread doing zfs_file I/O on behalf of another thread (the
+ * send taskq, when stacks are small): between enter and exit,
+ * zfs_file_io_interrupt() from the other thread interrupts a blocked read
+ * or write here, as a signal would.  Linux only; elsewhere they do nothing.
+ */
+void zfs_file_io_interruptible_enter(void);
+void zfs_file_io_interruptible_exit(void);
+void zfs_file_io_interrupt(kthread_t *t);
+#endif
+
 zfs_file_t *zfs_file_get(int fd);
 void zfs_file_put(zfs_file_t *fp);
 void *zfs_file_private(zfs_file_t *fp);

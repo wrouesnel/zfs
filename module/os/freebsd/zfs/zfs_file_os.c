@@ -321,6 +321,27 @@ zfs_file_deallocate(zfs_file_t *zfp, loff_t offset, loff_t len)
 	return (0);
 }
 
+/*
+ * Not implemented: a write blocked on the send taskq (only without
+ * HAVE_LARGE_STACKS) can't be interrupted from the sending thread here,
+ * so the send still waits for it to finish.
+ */
+void
+zfs_file_io_interruptible_enter(void)
+{
+}
+
+void
+zfs_file_io_interruptible_exit(void)
+{
+}
+
+void
+zfs_file_io_interrupt(kthread_t *t)
+{
+	(void) t;
+}
+
 zfs_file_t *
 zfs_file_get(int fd)
 {
