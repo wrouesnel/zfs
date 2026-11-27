@@ -762,6 +762,14 @@ tests = ['large_dnode_001_pos', 'large_dnode_003_pos', 'large_dnode_004_neg',
     'large_dnode_005_pos', 'large_dnode_007_neg', 'large_dnode_009_pos']
 tags = ['functional', 'features', 'large_dnode']
 
+[tests/functional/fileblocksize]
+tests = ['fileblocksize_001_pos', 'fileblocksize_002_neg',
+    'fileblocksize_003_pos', 'fileblocksize_004_pos', 'fileblocksize_005_pos',
+    'fileblocksize_006_pos', 'fileblocksize_007_pos', 'fileblocksize_008_neg',
+    'fileblocksize_010_pos', 'fileblocksize_011_neg', 'fileblocksize_012_neg',
+    'fileblocksize_013_neg', 'fileblocksize_015_neg', 'fileblocksize_017_pos']
+tags = ['functional', 'fileblocksize']
+
 [tests/functional/gang_blocks]
 tests = ['gang_blocks_001_pos', 'gang_blocks_redundant',
     'gang_blocks_ddt_copies', 'gang_blocks_dyn_header_pos',
@@ -876,8 +884,9 @@ tests = ['defaultprojectquota_002_pos', 'defaultprojectquota_003_neg',
     'defaultprojectquota_004_pos', 'defaultprojectquota_006_pos',
     'defaultprojectquota_007_pos', 'projectquota_002_pos',
     'projectquota_004_neg', 'projectquota_005_pos', 'projectquota_007_pos',
-    'projectquota_008_pos', 'projectquota_009_pos', 'projecttree_002_pos',
-    'projecttree_003_neg', 'projecttree_004_pos', 'projectspace_006_pos']
+    'projectquota_008_pos', 'projectquota_009_pos',
+    'projecttree_002_pos', 'projecttree_003_neg', 'projecttree_004_pos',
+    'projectspace_006_pos']
 tags = ['functional', 'projectquota']
 
 [tests/functional/poolversion]

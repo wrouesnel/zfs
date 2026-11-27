@@ -274,7 +274,7 @@ zfs_ioctl_getxattr(vnode_t *vp, zfsxattr_t *fsx)
 	    FS_PROJINHERIT_FL : 0;
 	fsx->fsx_projid = zp->z_projid;
 
-	return (0);
+	return (zfs_get_extsize(zp, &fsx->fsx_xflags, &fsx->fsx_extsize));
 }
 
 static int
@@ -311,22 +311,37 @@ zfs_ioctl_setxattr(vnode_t *vp, zfsxattr_t *fsx, cred_t *cr)
 	znode_t *zp = VTOZ(vp);
 	xvattr_t xva;
 	xoptattr_t *xoap;
+	zfs_extsize_req_t req = { 0 };
 	int err;
 
 	if (!zpl_is_valid_projid(fsx->fsx_projid))
 		return (SET_ERROR(EINVAL));
 
-	err = zfs_ioctl_setflags(vp, fsx->fsx_xflags, &xva);
+	err = zfs_ioctl_setflags(vp, fsx->fsx_xflags &
+	    ~(FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT), &xva);
 	if (err)
 		return (err);
+
+	/*
+	 * zfs_ioctl_setflags() doesn't check ownership; only the owner may
+	 * change the extent size, as on Linux.
+	 */
+	if ((fsx->fsx_xflags & (FS_XFLAG_EXTSIZE | FS_XFLAG_EXTSZINHERIT)) ||
+	    ZFS_BLKSZ_FIXED(zp) || (zp->z_pflags & ZFS_EXTSZINHERIT)) {
+		err = secpolicy_vnode_owner(vp, cr, zfs_fuid_map_id(
+		    zp->z_zfsvfs, zp->z_uid, cr, ZFS_OWNER));
+		if (err)
+			return (err);
+	}
 
 	xoap = xva_getxoptattr(&xva);
 	XVA_SET_REQ(&xva, XAT_PROJID);
 	xoap->xoa_projid = fsx->fsx_projid;
 
-	err = zfs_setattr(zp, (vattr_t *)&xva, 0, cr, NULL);
-
-	return (err);
+	/* The extent size changes in the same transaction as the rest. */
+	req.zer_xflags = fsx->fsx_xflags;
+	req.zer_extsize = fsx->fsx_extsize;
+	return (zfs_setattr_extsize(zp, (vattr_t *)&xva, cr, &req));
 }
 
 static int
@@ -2288,8 +2303,9 @@ next:
  * Timestamps:
  *	vp - ctime updated, mtime updated if size changed.
  */
-int
-zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
+static int
+zfs_setattr_impl(znode_t *zp, vattr_t *vap, int flags, cred_t *cr,
+    zidmap_t *mnt_ns, zfs_extsize_req_t *req)
 {
 	vnode_t		*vp = ZTOV(zp);
 	zfsvfs_t	*zfsvfs = zp->z_zfsvfs;
@@ -2331,6 +2347,12 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 
 	os = zfsvfs->z_os;
 	zilog = zfsvfs->z_log;
+
+	/* An extent size change comes only with FS_IOC_FSSETXATTR's flags. */
+	if (req != NULL && mask != AT_XVATTR) {
+		zfs_exit(zfsvfs, FTAG);
+		return (SET_ERROR(EINVAL));
+	}
 
 	/*
 	 * Make sure that if we have ephemeral uid/gid or xvattr specified
@@ -2716,6 +2738,12 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 			goto out2;
 		}
 	}
+
+	if (req != NULL && (err = zfs_extsize_begin(zp, xvap, req)) != 0) {
+		if (attrzp)
+			vput(ZTOV(attrzp));
+		goto out2;
+	}
 	tx = dmu_tx_create(os);
 
 	if (mask & AT_MODE) {
@@ -2757,7 +2785,8 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 		if (((mask & AT_XVATTR) &&
 		    XVA_ISSET_REQ(xvap, XAT_AV_SCANSTAMP)) ||
 		    (projid != ZFS_INVALID_PROJID &&
-		    !(zp->z_pflags & ZFS_PROJID)))
+		    !(zp->z_pflags & ZFS_PROJID)) ||
+		    (req != NULL && req->zer_change))
 			dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_TRUE);
 		else
 			dmu_tx_hold_sa(tx, zp->z_sa_hdl, B_FALSE);
@@ -2766,6 +2795,8 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 	if (attrzp) {
 		dmu_tx_hold_sa(tx, attrzp->z_sa_hdl, B_FALSE);
 	}
+	if (req != NULL)
+		zfs_extsize_hold(zp, req, tx);
 
 	fuid_dirtied = zfsvfs->z_fuid_dirty;
 	if (fuid_dirtied)
@@ -2776,6 +2807,15 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
 	err = dmu_tx_assign(tx, DMU_TX_WAIT);
 	if (err)
 		goto out;
+
+	/* First, so that if it fails nothing else has changed. */
+	if (req != NULL && req->zer_change &&
+	    (err = zfs_extsize_apply(zp, req, tx)) != 0) {
+		dmu_tx_commit(tx);
+		if (attrzp)
+			vput(ZTOV(attrzp));
+		goto out2;
+	}
 
 	count = 0;
 	/*
@@ -3005,11 +3045,27 @@ out:
 	}
 
 out2:
+	if (req != NULL && (err2 = zfs_extsize_end(zp, req)) != 0 && err == 0)
+		err = err2;
 	if (err == 0 && os->os_sync == ZFS_SYNC_ALWAYS)
 		err = zil_commit(zilog, 0);
 
 	zfs_exit(zfsvfs, FTAG);
 	return (err);
+}
+
+int
+zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr, zidmap_t *mnt_ns)
+{
+	return (zfs_setattr_impl(zp, vap, flags, cr, mnt_ns, NULL));
+}
+
+/* zfs_setattr() with an FS_IOC_FSSETXATTR extent size change. */
+int
+zfs_setattr_extsize(znode_t *zp, vattr_t *vap, cred_t *cr,
+    zfs_extsize_req_t *req)
+{
+	return (zfs_setattr_impl(zp, vap, 0, cr, NULL, req));
 }
 
 /*
