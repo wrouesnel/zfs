@@ -25,6 +25,7 @@ extern "C" {
 #endif
 
 #include <sys/avl.h>
+#include <sys/list.h>
 
 typedef enum {
 	RL_READER,
@@ -38,6 +39,7 @@ typedef void (zfs_rangelock_cb_t)(struct zfs_locked_range *, void *);
 
 typedef struct zfs_rangelock {
 	avl_tree_t rl_tree; /* contains locked_range_t */
+	list_t rl_held;	/* every lock entered and not yet exited */
 	kmutex_t rl_lock;
 	zfs_rangelock_cb_t *rl_cb;
 	void *rl_arg;
@@ -50,6 +52,8 @@ typedef struct zfs_locked_range {
 	uint64_t lr_length;	/* file range length */
 	uint_t lr_count;	/* range reference count in tree */
 	zfs_rangelock_type_t lr_type; /* range type */
+	list_node_t lr_held_node; /* link in rl_held (not for proxies) */
+	kthread_t *lr_owner;	/* thread that entered the lock */
 	kcondvar_t lr_write_cv;	/* cv for waiting writers */
 	kcondvar_t lr_read_cv;	/* cv for waiting readers */
 	uint8_t lr_proxy;	/* acting for original range */
@@ -66,6 +70,8 @@ zfs_locked_range_t *zfs_rangelock_tryenter(zfs_rangelock_t *,
     uint64_t, uint64_t, zfs_rangelock_type_t);
 void zfs_rangelock_exit(zfs_locked_range_t *);
 void zfs_rangelock_reduce(zfs_locked_range_t *, uint64_t, uint64_t);
+zfs_locked_range_t *zfs_rangelock_held(zfs_rangelock_t *, uint64_t,
+    uint64_t);
 
 #ifdef	__cplusplus
 }

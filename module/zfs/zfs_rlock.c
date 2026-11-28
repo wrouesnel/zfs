@@ -129,6 +129,8 @@ zfs_rangelock_init(zfs_rangelock_t *rl, zfs_rangelock_cb_t *cb, void *arg)
 	mutex_init(&rl->rl_lock, NULL, MUTEX_DEFAULT, NULL);
 	avl_create(&rl->rl_tree, zfs_rangelock_compare,
 	    sizeof (zfs_locked_range_t), offsetof(zfs_locked_range_t, lr_node));
+	list_create(&rl->rl_held, sizeof (zfs_locked_range_t),
+	    offsetof(zfs_locked_range_t, lr_held_node));
 	rl->rl_cb = cb;
 	rl->rl_arg = arg;
 }
@@ -138,6 +140,7 @@ zfs_rangelock_fini(zfs_rangelock_t *rl)
 {
 	mutex_destroy(&rl->rl_lock);
 	avl_destroy(&rl->rl_tree);
+	list_destroy(&rl->rl_held);
 }
 
 /*
@@ -485,6 +488,7 @@ zfs_rangelock_enter_impl(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 	new->lr_length = len;
 	new->lr_count = 1; /* assume it's going to be in the tree */
 	new->lr_type = type;
+	new->lr_owner = curthread;
 	new->lr_proxy = B_FALSE;
 	new->lr_write_wanted = B_FALSE;
 	new->lr_read_wanted = B_FALSE;
@@ -504,6 +508,8 @@ zfs_rangelock_enter_impl(zfs_rangelock_t *rl, uint64_t off, uint64_t len,
 		kmem_free(new, sizeof (*new));
 		new = NULL;
 	}
+	if (new != NULL)
+		list_insert_tail(&rl->rl_held, new);
 	mutex_exit(&rl->rl_lock);
 	return (new);
 }
@@ -621,6 +627,7 @@ zfs_rangelock_exit(zfs_locked_range_t *lr)
 	    offsetof(zfs_locked_range_t, lr_node));
 
 	mutex_enter(&rl->rl_lock);
+	list_remove(&rl->rl_held, lr);
 	if (lr->lr_type == RL_WRITER) {
 		/* writer locks can't be shared or split */
 		avl_remove(&rl->rl_tree, lr);
@@ -672,9 +679,35 @@ zfs_rangelock_reduce(zfs_locked_range_t *lr, uint64_t off, uint64_t len)
 		cv_broadcast(&lr->lr_read_cv);
 }
 
+/*
+ * Return a lock the calling thread holds (and hasn't exited) that overlaps
+ * [off, off + len), or NULL.  For a page fault taken while this thread holds
+ * the file's range lock: waiting for the range would wait for ourselves.
+ */
+zfs_locked_range_t *
+zfs_rangelock_held(zfs_rangelock_t *rl, uint64_t off, uint64_t len)
+{
+	zfs_locked_range_t *lr;
+	uint64_t end = off + len;
+
+	if (end < off)
+		end = UINT64_MAX;
+	mutex_enter(&rl->rl_lock);
+	for (lr = list_head(&rl->rl_held); lr != NULL;
+	    lr = list_next(&rl->rl_held, lr)) {
+		if (lr->lr_owner == curthread && lr->lr_offset < end &&
+		    off < lr->lr_offset + lr->lr_length)
+			break;
+	}
+	mutex_exit(&rl->rl_lock);
+
+	return (lr);
+}
+
 EXPORT_SYMBOL(zfs_rangelock_init);
 EXPORT_SYMBOL(zfs_rangelock_fini);
 EXPORT_SYMBOL(zfs_rangelock_enter);
 EXPORT_SYMBOL(zfs_rangelock_tryenter);
 EXPORT_SYMBOL(zfs_rangelock_exit);
 EXPORT_SYMBOL(zfs_rangelock_reduce);
+EXPORT_SYMBOL(zfs_rangelock_held);

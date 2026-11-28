@@ -4340,7 +4340,25 @@ zfs_getpage(struct inode *ip, struct page *pp)
 	 */
 	zfs_locked_range_t *lr = zfs_rangelock_tryenter(&zp->z_rangelock,
 	    io_off, io_len, RL_READER);
+	zfs_locked_range_t *lr2 = NULL;
 	if (lr == NULL) {
+		/*
+		 * This thread may hold the file's range lock over the page
+		 * itself: a write whose source maps this file faults its
+		 * source in with its writer lock held (openzfs #18135), and
+		 * a read into a mapping of this file faults with its reader
+		 * lock held, behind which a writer may have queued.  Waiting
+		 * would then wait for ourselves, forever.  Our own lock
+		 * already keeps other writers out of its range, and our own
+		 * write isn't changing it while we are here, so lock only
+		 * the parts of the page outside it.
+		 */
+		zfs_locked_range_t *own = zfs_rangelock_held(
+		    &zp->z_rangelock, io_off, io_len);
+		uint64_t own_off = own == NULL ? 0 : own->lr_offset;
+		uint64_t own_end = own == NULL ? 0 :
+		    own->lr_offset + own->lr_length;
+
 		/*
 		 * It is important to drop the page lock before grabbing the
 		 * rangelock to avoid another deadlock between here and
@@ -4349,13 +4367,28 @@ zfs_getpage(struct inode *ip, struct page *pp)
 		 */
 		get_page(pp);
 		unlock_page(pp);
-		lr = zfs_rangelock_enter(&zp->z_rangelock, io_off,
-		    io_len, RL_READER);
+		if (own == NULL) {
+			lr = zfs_rangelock_enter(&zp->z_rangelock, io_off,
+			    io_len, RL_READER);
+		} else {
+			if (io_off < own_off) {
+				lr = zfs_rangelock_enter(&zp->z_rangelock,
+				    io_off, own_off - io_off, RL_READER);
+			}
+			if (io_off + io_len > own_end) {
+				lr2 = zfs_rangelock_enter(&zp->z_rangelock,
+				    own_end, io_off + io_len - own_end,
+				    RL_READER);
+			}
+		}
 		lock_page(pp);
 		put_page(pp);
 	}
 	error = zfs_fillpage(ip, pp);
-	zfs_rangelock_exit(lr);
+	if (lr != NULL)
+		zfs_rangelock_exit(lr);
+	if (lr2 != NULL)
+		zfs_rangelock_exit(lr2);
 
 	if (error == 0)
 		dataset_kstats_update_read_kstats(&zfsvfs->z_kstat, PAGE_SIZE);
