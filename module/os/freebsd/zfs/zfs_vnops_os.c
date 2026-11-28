@@ -2796,8 +2796,21 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr)
 		 * offset directly. So we need to adjust old objects' layout
 		 * to make the project ID to some unified and fixed offset.
 		 */
-		if (attrzp)
+		boolean_t both_added = B_TRUE;
+
+		if (attrzp) {
 			err = sa_add_projid(attrzp->z_sa_hdl, tx, projid);
+			/*
+			 * The xattr dir already has a project ID slot (it was
+			 * created after project quota was enabled, or an
+			 * earlier attempt failed on zp): zp still needs one.
+			 * The project ID is then set on attrzp below.
+			 */
+			if (err == EEXIST) {
+				both_added = B_FALSE;
+				err = 0;
+			}
+		}
 		if (err == 0)
 			err = sa_add_projid(zp->z_sa_hdl, tx, projid);
 
@@ -2805,7 +2818,7 @@ zfs_setattr(znode_t *zp, vattr_t *vap, int flags, cred_t *cr)
 			err = 0;
 		else if (err != 0)
 			goto out;
-		else
+		else if (both_added)
 			projid = ZFS_INVALID_PROJID;
 	}
 
