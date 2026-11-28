@@ -1929,14 +1929,17 @@ zfs_setattr_dir(znode_t *dzp)
 sa_add_projid_err:
 		mutex_exit(&dzp->z_lock);
 
+		/*
+		 * The tx is assigned, so commit it even if sa_add_projid()
+		 * failed, and keep that error.
+		 */
 		if (likely(count > 0)) {
-			err = sa_bulk_update(zp->z_sa_hdl, bulk, count, tx);
-			dmu_tx_commit(tx);
-		} else if (projid == ZFS_INVALID_PROJID) {
-			dmu_tx_commit(tx);
-		} else {
-			dmu_tx_abort(tx);
+			int err2 = sa_bulk_update(zp->z_sa_hdl, bulk, count,
+			    tx);
+			if (err == 0)
+				err = err2;
 		}
+		dmu_tx_commit(tx);
 		tx = NULL;
 		if (err != 0 && err != ENOENT)
 			break;
@@ -2009,6 +2012,7 @@ zfs_setattr_idmap(znode_t *zp, vattr_t *vap, int flags, cred_t *cr,
 	boolean_t skipaclchk = (flags & ATTR_NOACLCHECK) ? B_TRUE : B_FALSE;
 	boolean_t	fuid_dirtied = B_FALSE;
 	boolean_t	handle_eadir = B_FALSE;
+	boolean_t	tx_assigned = B_FALSE;
 	sa_bulk_attr_t	*bulk, *xattr_bulk;
 	int		count = 0, xattr_count = 0, bulks = 9;
 
@@ -2117,6 +2121,7 @@ zfs_setattr_idmap(znode_t *zp, vattr_t *vap, int flags, cred_t *cr,
 top:
 	attrzp = NULL;
 	aclp = NULL;
+	tx_assigned = B_FALSE;
 
 	/* Can this be moved to before the top label? */
 	if (zfs_is_readonly(zfsvfs)) {
@@ -2463,6 +2468,7 @@ top:
 	err = dmu_tx_assign(tx, DMU_TX_WAIT);
 	if (err)
 		goto out;
+	tx_assigned = B_TRUE;
 
 	count = 0;
 	/*
@@ -2699,7 +2705,15 @@ out:
 	}
 
 	if (err) {
-		dmu_tx_abort(tx);
+		/*
+		 * A failure after dmu_tx_assign() (such as sa_add_projid()
+		 * failing to read the old layout) must still commit the tx:
+		 * dmu_tx_abort() may only be used on an unassigned tx.
+		 */
+		if (tx_assigned)
+			dmu_tx_commit(tx);
+		else
+			dmu_tx_abort(tx);
 		if (attrzp)
 			zrele(attrzp);
 		if (err == ERESTART)
