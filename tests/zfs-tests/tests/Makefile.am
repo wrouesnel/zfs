@@ -1945,6 +1945,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/mmap/mmap_seek_001_pos.ksh \
 	functional/mmap/mmap_sync_001_pos.ksh \
 	functional/mmap/mmap_write_001_pos.ksh \
+	functional/mmap/mmap_write_selfmap.ksh \
 	functional/mmap/mmap_ftruncate.ksh \
 	functional/mmap/mmap_read_truncate.ksh \
 	functional/mmap/mmap_cached_rollback.ksh \

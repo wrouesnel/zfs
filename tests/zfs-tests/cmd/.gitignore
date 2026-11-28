@@ -40,6 +40,7 @@
 /mmap_sync
 /mmapwrite
 /mmap_write_sync
+/mmap_write_selfmap
 /mount_null_source
 /nvlist_to_lua
 /open_by_fid
