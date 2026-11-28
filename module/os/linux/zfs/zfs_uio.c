@@ -259,10 +259,19 @@ zfs_uiomove_iter(void *p, size_t n, zfs_uio_rw_t rw, zfs_uio_t *uio,
 	 * side of the iov_iter is validated within _copy_to_iter() and is
 	 * unaffected.
 	 */
-	if (rw == UIO_READ)
+	if (rw == UIO_READ) {
 		cnt = _copy_to_iter(p, cnt, uio->uio_iter);
-	else
+	} else if (uio->uio_fault_disable) {
+		/*
+		 * zfs_write() prefaulted the source and holds a tx: copy
+		 * what is resident and let it fault the rest in later.
+		 */
+		pagefault_disable();
 		cnt = _copy_from_iter(p, cnt, uio->uio_iter);
+		pagefault_enable();
+	} else {
+		cnt = _copy_from_iter(p, cnt, uio->uio_iter);
+	}
 
 	/*
 	 * When operating on a full pipe no bytes are processed.

@@ -633,6 +633,7 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 	ssize_t start_resid = zfs_uio_resid(uio);
 	uint64_t clear_setid_bits_txg = 0;
 	boolean_t o_direct_defer = B_FALSE;
+	boolean_t refault = B_FALSE;
 
 	/*
 	 * Fasttrack empty write
@@ -922,28 +923,17 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 			    uio, nbytes, tx, dflags);
 			zfs_uio_fault_disable(uio, B_FALSE);
 #ifdef __linux__
+			/*
+			 * The copy runs with page faults disabled: a fault
+			 * with the tx assigned would hold up the txg, and if
+			 * the source maps this file it would wait for this
+			 * write.  When a source page isn't resident, keep and
+			 * log what was copied, then fault the rest in with no
+			 * tx open on the next pass and continue.
+			 */
 			if (error == EFAULT) {
-				zfs_clear_setid_bits_if_necessary(zfsvfs, zp,
-				    cr, &clear_setid_bits_txg, tx);
-				dmu_tx_commit(tx);
-				/*
-				 * Account for partial writes before
-				 * continuing the loop.
-				 * Update needs to occur before the next
-				 * zfs_uio_prefaultpages, or prefaultpages may
-				 * error, and we may break the loop early.
-				 */
-				n -= tx_bytes - zfs_uio_resid(uio);
-				/*
-				 * The prefaulted pages still faulted, so force
-				 * a re-prefault on the next pass.  If they can
-				 * no longer be faulted in (e.g. the calling
-				 * process is exiting), zfs_uio_prefaultpages()
-				 * fails and the loop breaks with EFAULT instead
-				 * of spinning on them forever.
-				 */
-				pfbytes = 0;
-				continue;
+				refault = B_TRUE;
+				error = 0;
 			}
 #endif
 			/*
@@ -1014,6 +1004,22 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 		 * If we made no progress, we're done.  If we made even
 		 * partial progress, update the znode and ZIL accordingly.
 		 */
+		if (tx_bytes == 0 && refault) {
+			zfs_clear_setid_bits_if_necessary(zfsvfs, zp, cr,
+			    &clear_setid_bits_txg, tx);
+			dmu_tx_commit(tx);
+			/*
+			 * Nothing was copied.  The prefaulted pages still
+			 * faulted, so force a re-prefault on the next pass.
+			 * If they can no longer be faulted in (e.g. the
+			 * calling process is exiting), zfs_uio_prefaultpages()
+			 * fails and the loop breaks with EFAULT instead of
+			 * spinning on them forever.
+			 */
+			refault = B_FALSE;
+			pfbytes = 0;
+			continue;
+		}
 		if (tx_bytes == 0) {
 			(void) sa_update(zp->z_sa_hdl, SA_ZPL_SIZE(zfsvfs),
 			    (void *)&zp->z_size, sizeof (uint64_t), tx);
@@ -1075,6 +1081,13 @@ zfs_write(znode_t *zp, zfs_uio_t *uio, int ioflag, cred_t *cr)
 
 		if (error != 0)
 			break;
+		if (refault) {
+			ASSERT3S(tx_bytes, <, nbytes);
+			n -= tx_bytes;
+			refault = B_FALSE;
+			pfbytes = 0;
+			continue;
+		}
 		ASSERT3S(tx_bytes, ==, nbytes);
 		n -= nbytes;
 		pfbytes -= nbytes;
