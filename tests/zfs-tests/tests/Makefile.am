@@ -2516,6 +2516,7 @@ nobase_dist_datadir_zfs_tests_tests_SCRIPTS += \
 	functional/upgrade/upgrade_projectquota_001_pos.ksh \
 	functional/upgrade/upgrade_projectquota_002_pos.ksh \
 	functional/upgrade/upgrade_projectquota_003_neg.ksh \
+	functional/upgrade/upgrade_projectquota_004_pos.ksh \
 	functional/upgrade/upgrade_readonly_pool.ksh \
 	functional/upgrade/upgrade_userobj_001_pos.ksh \
 	functional/user_namespace/cleanup.ksh \
